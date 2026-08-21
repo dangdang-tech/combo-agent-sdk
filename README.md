@@ -1,4 +1,4 @@
-# @cb/agent-sdk
+# combo-agent-sdk
 
 **Combo 平台 Agent 开发套件** — 运行时 SDK + Next.js 最小模板，让收编的 Agent 用几十行代码接入平台的身份、模型与计费能力。
 
@@ -24,8 +24,8 @@ SDK 不持有任何 provider key 与平台密钥，不依赖 Node 专有 API —
 ### 1. 安装
 
 ```bash
-npm pack                                   # 产出 cb-agent-sdk-<version>.tgz
-npm install ./cb-agent-sdk-<version>.tgz   # 在消费方仓库安装
+npm pack                                   # 产出 combo-agent-sdk-<version>.tgz
+npm install ./combo-agent-sdk-<version>.tgz   # 在消费方仓库安装
 ```
 
 ### 2. 配置环境变量
@@ -51,7 +51,7 @@ import {
   createAssertionVerifier,
   createLlmClient,
   loadAgentSdkConfig,
-} from '@cb/agent-sdk';
+} from 'combo-agent-sdk';
 
 const config = loadAgentSdkConfig();
 const verifier = createAssertionVerifier({ jwksUrl: config.jwksUrl, agentId: config.agentId });

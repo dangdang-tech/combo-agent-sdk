@@ -1,5 +1,5 @@
 {
-  "name": "@cb/agent-sdk",
+  "name": "combo-agent-sdk",
   "version": "0.0.0",
   "private": true,
   "description": "Agent 运行时 SDK：断言验签（jose + JWKS 缓存）、llm client（指向模型网关）、entitlement 查询（计费读模型）。Agent 侧满足薄容器契约的默认实现。",

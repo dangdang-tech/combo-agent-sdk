@@ -5,7 +5,7 @@ import {
   createAssertionVerifier,
   createLlmClient,
   loadAgentSdkConfig,
-} from '@cb/agent-sdk';
+} from 'combo-agent-sdk';
 
 // Next.js 路由模块在构建期也可能被加载，配置解析放在首次请求时做，失败即启动即报错
 // 交给 /api/healthz 之外的进程级检查（doctor）兜底。
