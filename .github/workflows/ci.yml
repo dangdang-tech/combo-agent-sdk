@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -89,20 +91,36 @@ jobs:
             'PAYMENT_SDK_INTEGRATION.md',
             'dist/index.js',
             'dist/index.d.ts',
+            'dist/payments.js',
+            'dist/payments.d.ts',
+            'templates/nextjs-agent/.env.example',
             'templates/nextjs-agent/README.md',
+            'templates/nextjs-agent/agent.yaml',
             'templates/nextjs-agent/package.json',
+            'templates/nextjs-agent/tsconfig.json',
+            'templates/nextjs-agent/next-env.d.ts',
             'templates/nextjs-agent/app/api/chat/route.ts',
             'templates/nextjs-agent/app/api/healthz/route.ts',
             'templates/nextjs-agent/app/api/operations/[operationId]/resume/route.ts',
+            'templates/nextjs-agent/app/layout.tsx',
+            'templates/nextjs-agent/app/page.tsx',
+            'templates/nextjs-agent/lib/combo-runtime.ts',
+            'templates/nextjs-agent/lib/operation-handler.ts',
             'templates/nextjs-agent/lib/operation-store.ts',
           ];
           const missing = required.filter((path) => !files.has(path));
           const forbidden = [...files].filter((path) =>
-            /(^|\/)(?:\.next|node_modules)(?:\/|$)/.test(path),
+            /(^|\/)(?:\.next|node_modules)(?:\/|$)/.test(path) ||
+            (/(^|\/)\.env(?:$|\.)/.test(path) && !path.endsWith('/.env.example')),
           );
+          const tooLarge = {
+            fileCount: files.size > 80 ? files.size : null,
+            packedBytes: report[0]?.size > 200_000 ? report[0].size : null,
+            unpackedBytes: report[0]?.unpackedSize > 500_000 ? report[0].unpackedSize : null,
+          };
 
-          if (missing.length > 0 || forbidden.length > 0) {
-            console.error(JSON.stringify({ missing, forbidden }, null, 2));
+          if (missing.length > 0 || forbidden.length > 0 || Object.values(tooLarge).some(Boolean)) {
+            console.error(JSON.stringify({ missing, forbidden, tooLarge }, null, 2));
             process.exit(1);
           }
           NODE
