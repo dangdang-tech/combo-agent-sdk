@@ -1,19 +1,85 @@
-# nextjs-agent 模板
+# Combo Reference Agent
 
-这是收编 Agent 的最小模板骨架：fork 它、改业务逻辑，就满足平台的薄容器契约。本期是验证期骨架，不追求开箱即跑完整链路。
+这是一个可以直接安装、构建和启动的 Next.js 示例。它展示业务与支付的边界：
+
+> 当前随 SDK `0.1.0` 源码提供，状态为 `UNRELEASED / PARTIAL`。它验证本地合同，不代表真实 Payment API、Sandbox 或跨仓链路已经上线。
+> 模板里的 `COMBO_PLATFORM_INTERNAL_TOKEN` 目前仍是受控验证环境的共享内部凭据，不是按 Agent 签发的正式身份。per-Agent、短期、限权凭据必须由 Combo 后端完成后才能外部使用。
+
+- 业务保存 `operationId`、原始请求、稳定 `callId`、状态和结果。
+- SDK 识别标准 402，但不保存业务数据，也不自动恢复任务。
+- Agent 给 Host 的 402 正文严格只有 `version`、`type` 和 `paymentToken`。
+- Host 完成支付后，使用当前用户的新身份调用恢复接口。
+
+## 运行
+
+在 SDK 仓库根目录执行：
+
+```bash
+pnpm install
+pnpm build
+cd templates/nextjs-agent
+pnpm install
+cp .env.example .env.local
+pnpm dev
+```
+
+将 `.env.local` 中的占位值换成受限 Test 环境配置。不要把它提交到仓库。
+
+```bash
+curl http://localhost:3000/api/healthz
+```
+
+业务请求由 Combo Host 携带 `x-combo-assertion` 调用：
+
+```http
+POST /api/chat
+Content-Type: application/json
+
+{
+  "operationId": "业务生成并保存的稳定编号",
+  "messages": [{ "role": "user", "content": "你好" }]
+}
+```
+
+余额不足时返回 HTTP 402：
+
+```json
+{
+  "version": 1,
+  "type": "combo.payment_required",
+  "paymentToken": "Combo 签发的短期不透明凭证"
+}
+```
+
+Host 只能把 `paymentToken` 交回 Combo，并使用当前登录用户解析。不要使用 Agent 自报的金额、支付方式、二维码或网址。
+
+支付完成后，Host 使用当前用户的新断言调用：
+
+```http
+POST /api/operations/{operationId}/resume
+```
+
+示例会复用原来的 `callId`。如果任务已经完成，会直接返回保存的结果。
+
+## 持久化边界
+
+[`lib/operation-store.ts`](lib/operation-store.ts) 定义了业务必须实现的 `OperationStore`。为了让示例开箱运行，仓库附带内存实现；它在进程重启后会清空，不能直接用于生产。
+
+生产实现至少需要：
+
+- 持久保存请求、`operationId`、`callId`、状态和结果；
+- 同一个用户和 `operationId` 串行执行；
+- 拒绝同一个 `operationId` 换成另一份业务输入；
+- 完成后重复恢复只返回保存结果；
+- 不保存第一次请求的短期身份断言。
+
+这部分属于业务，不属于 Payment SDK。
 
 ## 文件
 
-- `agent.yaml` 是 Agent 与平台之间的唯一契约文件：端口、探针、资源、环境变量名与 capabilities。环境变量只声明名字，值由平台注入。
-- `app/api/chat/route.ts` 是调用 SDK 的示例路由：验证 `x-combo-assertion` 头里的身份断言（aud 强制等于本 Agent 的 agent_id），然后把对话请求流式透传给平台模型网关。
-
-## 用法说明
-
-- 身份：路由处理器里用 `createAssertionVerifier(...).verifyRequest(request)` 拿 `userId`。断言只带身份，不带权益。
-- 对话：用 `createLlmClient(...)` 调平台模型网关，`userId` 必填，`turnId` 一轮对话复用同一个以对齐计量；余额不足时网关返回 402，SDK 抛 `LlmGatewayError`（status 402，body 含当前钱包），Agent 据此引导充值。
-- 权益：用 `createEntitlementClient(...).check(userId)` 读余额与冻结，权益判定在 Agent 代码里完成。
-- 配置：五个 `COMBO_` 环境变量在本地开发时自行设置，平台上由 agent.yaml 声明、平台注入。`loadAgentSdkConfig()` 启动即校验，缺失直接报错。
-
-## 本期边界
-
-模板没有包含完整 Next.js 工程文件（package.json、tsconfig 等），收编首个 Agent 时按真实工程补齐；CLI（combo push）、storage 能力与消息 envelope 都不在本期范围。
+- `agent.yaml`：部署能力和环境变量声明。
+- `app/api/chat/route.ts`：开始业务请求。
+- `app/api/operations/[operationId]/resume/route.ts`：支付后继续。
+- `app/api/healthz/route.ts`：配置健康检查。
+- `lib/operation-store.ts`：业务持久化接口和本地内存实现。
+- `lib/operation-handler.ts`：稳定 `callId`、类型化 402 和重复恢复示例。

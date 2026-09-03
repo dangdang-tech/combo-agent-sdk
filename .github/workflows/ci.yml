@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 20
+          - 24
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.9
+          run_install: false
+
+      # pnpm 11 itself needs Node >=22.13. Install the locked dependency graph
+      # under Node 24, then execute every project gate under the runtime matrix.
+      - name: Set up dependency toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up tested Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Confirm tested runtime
+        run: node --version
+
+      - name: Check production types
+        run: npm run typecheck
+
+      - name: Check test types
+        run: npm run typecheck:test
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build SDK
+        run: npm run build
+
+      - name: Run package preflight
+        run: npm run prepack
+
+      - name: Check Reference Agent types
+        run: npm --prefix templates/nextjs-agent run typecheck
+
+      - name: Build Reference Agent
+        run: npm --prefix templates/nextjs-agent run build
+
+      - name: Verify package contents
+        env:
+          PACK_REPORT: ${{ runner.temp }}/combo-agent-sdk-pack.json
+        run: |
+          npm pack --dry-run --json --ignore-scripts > "$PACK_REPORT"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const report = JSON.parse(readFileSync(process.env.PACK_REPORT, 'utf8'));
+          const files = new Set(report[0]?.files?.map(({ path }) => path) ?? []);
+          const required = [
+            'AGENT.md',
+            'PAYMENT_SDK_INTEGRATION.md',
+            'dist/index.js',
+            'dist/index.d.ts',
+            'dist/payments.js',
+            'dist/payments.d.ts',
+            'templates/nextjs-agent/.env.example',
+            'templates/nextjs-agent/README.md',
+            'templates/nextjs-agent/agent.yaml',
+            'templates/nextjs-agent/package.json',
+            'templates/nextjs-agent/tsconfig.json',
+            'templates/nextjs-agent/next-env.d.ts',
+            'templates/nextjs-agent/app/api/chat/route.ts',
+            'templates/nextjs-agent/app/api/healthz/route.ts',
+            'templates/nextjs-agent/app/api/operations/[operationId]/resume/route.ts',
+            'templates/nextjs-agent/app/layout.tsx',
+            'templates/nextjs-agent/app/page.tsx',
+            'templates/nextjs-agent/lib/combo-runtime.ts',
+            'templates/nextjs-agent/lib/operation-handler.ts',
+            'templates/nextjs-agent/lib/operation-store.ts',
+          ];
+          const missing = required.filter((path) => !files.has(path));
+          const forbidden = [...files].filter((path) =>
+            /(^|\/)(?:\.next|node_modules)(?:\/|$)/.test(path) ||
+            (/(^|\/)\.env(?:$|\.)/.test(path) && !path.endsWith('/.env.example')),
+          );
+          const tooLarge = {
+            fileCount: files.size > 80 ? files.size : null,
+            packedBytes: report[0]?.size > 200_000 ? report[0].size : null,
+            unpackedBytes: report[0]?.unpackedSize > 500_000 ? report[0].unpackedSize : null,
+          };
+
+          if (missing.length > 0 || forbidden.length > 0 || Object.values(tooLarge).some(Boolean)) {
+            console.error(JSON.stringify({ missing, forbidden, tooLarge }, null, 2));
+            process.exit(1);
+          }
+          NODE

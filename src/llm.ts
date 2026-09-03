@@ -1,35 +1,41 @@
 // llm client：指向平台模型网关的 OpenAI 兼容子集封装。自动注入 x_combo 平台扩展
-// （user_id / agent_id / turn_id），turn_id 可传可自动生成；流式返回原始字节流，
+// （user_id / agent_id / turn_id）。调用方必须传稳定 callId；wire 暂沿用 turn_id。
 // 可直接交给 Next.js 路由处理器透传。
+import { LlmGatewayError } from './llm-error.js';
+import { parsePaymentRequiredError } from './payments.js';
 
-export class LlmGatewayError extends Error {
-  constructor(
-    readonly status: number,
-    readonly body: unknown,
-    message?: string,
-  ) {
-    super(message ?? `llm gateway returned ${status}`);
-    this.name = 'LlmGatewayError';
-  }
-}
+export { LlmGatewayError } from './llm-error.js';
 
 export interface ChatMessage {
   role: string;
   content: unknown;
 }
 
-export interface ChatCompletionInput {
+export interface ChatCompletionInputBase {
   /** 来自验签后的断言。 */
   userId: string;
   messages: ChatMessage[];
   model?: string;
   stream?: boolean;
   maxTokens?: number;
-  /** 缺省自动生成；一次对话的一轮调用应复用同一 turn_id 以对齐计量。 */
-  turnId?: string;
   /** 其余 OpenAI 兼容字段（temperature 等）原样透传。 */
   [extra: string]: unknown;
 }
+
+export type ChatCompletionInput = ChatCompletionInputBase &
+  (
+    | {
+        /** 一次收费调用的稳定编号；重试必须复用。 */
+        callId: string;
+        /** @deprecated 使用 callId。若同时传入，两者必须完全相同。 */
+        turnId?: string;
+      }
+    | {
+        callId?: never;
+        /** @deprecated 使用 callId。保留一个版本周期。 */
+        turnId: string;
+      }
+  );
 
 export interface LlmClient {
   /** 非流式：返回 provider 的完整 JSON。非 2xx 抛 LlmGatewayError（402 带钱包信息）。 */
@@ -49,14 +55,16 @@ export interface LlmClientOptions {
   fetchImpl?: FetchLike;
   /** 缺省模型，请求未指定时使用。 */
   defaultModel?: string;
-  randomId?: () => string;
 }
+
+const CALL_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
 
 function buildGatewayBody(
   input: ChatCompletionInput,
   options: LlmClientOptions,
 ): Record<string, unknown> {
-  const { userId, turnId, maxTokens, stream, messages, model, ...rest } = input;
+  const { userId, callId, turnId, maxTokens, stream, messages, model, ...rest } = input;
+  const stableCallId = resolveCallId(callId, turnId);
   const body: Record<string, unknown> = {
     ...rest,
     model: model ?? options.defaultModel,
@@ -64,13 +72,27 @@ function buildGatewayBody(
     x_combo: {
       user_id: userId,
       agent_id: options.agentId,
-      turn_id: turnId ?? (options.randomId ?? (() => globalThis.crypto.randomUUID()))(),
+      turn_id: stableCallId,
     },
   };
   if (!body.model) throw new LlmGatewayError(0, null, 'model is required (no default configured)');
   if (stream !== undefined) body.stream = stream;
   if (maxTokens !== undefined) body.max_tokens = maxTokens;
   return body;
+}
+
+function resolveCallId(callId: string | undefined, turnId: string | undefined): string {
+  if (!callId && !turnId) {
+    throw new LlmGatewayError(0, null, 'callId is required and must be reused for retries');
+  }
+  if (callId && turnId && callId !== turnId) {
+    throw new LlmGatewayError(0, null, 'callId and deprecated turnId must match');
+  }
+  const resolved = callId ?? turnId!;
+  if (!CALL_ID_PATTERN.test(resolved)) {
+    throw new LlmGatewayError(0, null, 'callId must use the canonical ASCII identifier format');
+  }
+  return resolved;
 }
 
 export function createLlmClient(options: LlmClientOptions): LlmClient {
@@ -96,7 +118,7 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
       const response = await post(buildGatewayBody(input, options), false);
       const json = await response.json().catch(() => null);
       if (response.status < 200 || response.status >= 300) {
-        throw new LlmGatewayError(response.status, json);
+        throw parsePaymentRequiredError(response.status, json) ?? new LlmGatewayError(response.status, json);
       }
       return json;
     },
@@ -104,10 +126,23 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
     async chatCompletionStream(input) {
       const response = await post({ ...buildGatewayBody(input, options), stream: true }, true);
       if (response.status < 200 || response.status >= 300 || !response.body) {
-        const body = await response.text().catch(() => '');
-        throw new LlmGatewayError(response.status, body || null);
+        const text = await response.text().catch(() => '');
+        const body = parseJson(text);
+        throw (
+          parsePaymentRequiredError(response.status, body) ??
+          new LlmGatewayError(response.status, body)
+        );
       }
       return response.body;
     },
   };
+}
+
+function parseJson(value: string): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
 }

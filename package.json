@@ -1,8 +1,9 @@
 {
   "name": "combo-agent-sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Agent 运行时 SDK：断言验签（jose + JWKS 缓存）、llm client（指向模型网关）、entitlement 查询（计费读模型）。Agent 侧满足薄容器契约的默认实现。",
+  "packageManager": "pnpm@11.0.9",
+  "description": "Combo Agent 运行时 SDK：身份断言、模型网关、钱包读模型与托管支付客户端。",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,10 +14,24 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "PAYMENT_SDK_INTEGRATION.md",
+    "AGENT.md",
+    "templates/nextjs-agent/.env.example",
+    "templates/nextjs-agent/README.md",
+    "templates/nextjs-agent/agent.yaml",
+    "templates/nextjs-agent/app",
+    "templates/nextjs-agent/lib",
+    "templates/nextjs-agent/next-env.d.ts",
+    "templates/nextjs-agent/package.json",
+    "templates/nextjs-agent/tsconfig.json"
   ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "build": "tsc -b",
+    "prepare": "tsc -b",
     "prepack": "tsc -b",
     "typecheck": "tsc -b --noEmit false",
     "typecheck:test": "tsc -p tsconfig.vitest.json",
