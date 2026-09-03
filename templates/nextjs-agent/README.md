@@ -2,6 +2,8 @@
 
 这是一个可以直接安装、构建和启动的 Next.js 示例。它展示业务与支付的边界：
 
+> 当前随 SDK `0.1.0` 源码提供，状态为 `UNRELEASED / PARTIAL`。它验证本地合同，不代表真实 Payment API、Sandbox 或跨仓链路已经上线。
+
 - 业务保存 `operationId`、原始请求、稳定 `callId`、状态和结果。
 - SDK 识别标准 402，但不保存业务数据，也不自动恢复任务。
 - Agent 给 Host 的 402 正文严格只有 `version`、`type` 和 `paymentToken`。

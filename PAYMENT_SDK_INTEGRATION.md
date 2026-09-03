@@ -2,6 +2,8 @@
 
 这份文档只讲第一版能力：用户在调用收费能力时余额不足，进入 Combo 托管收银台，支付完成后由业务继续原请求。
 
+> 状态：`UNRELEASED / PARTIAL`。后端绑定身份、真实 Payment API、Sandbox 与 conformance 尚未交付。本说明是跨仓实现合同，不是外部可用声明，不能据此关闭 Combo #308。
+
 ## 一句话边界
 
 Payment SDK 是 Combo 支付中台的无状态客户端。
@@ -66,17 +68,19 @@ try {
   "error": { "code": "payment_required" },
   "data": {
     "paymentRequirement": {
-      "id": "payreq_...",
-      "paymentToken": "opaque...",
+      "id": "payreq_123",
+      "paymentToken": "opaque_payment_token_123",
       "amount": { "currency": "CNY", "amountCents": "600" },
       "expiresAt": "2026-09-03T10:05:00.000Z"
     }
   },
-  "meta": { "traceId": "trace_..." }
+  "meta": { "traceId": "trace_123" }
 }
 ```
 
 金额使用整数分的字符串，不能用浮点数。`PaymentRequiredError` 继承 `LlmGatewayError`；不符合新格式的旧 402 仍保持为普通 `LlmGatewayError`。
+
+标准 402 的每一层都只接受文档列出的字段。未知字段会使它保持为普通 402，不会升级成 `PaymentRequiredError`。类型化错误的默认 JSON 和日志不包含 `paymentToken`、金额或原始响应；仍然禁止记录完整错误或显式读取并记录 token。
 
 给 Host 的消息严格只有三个字段：
 
@@ -84,7 +88,7 @@ try {
 {
   "version": 1,
   "type": "combo.payment_required",
-  "paymentToken": "opaque..."
+  "paymentToken": "opaque_payment_token_123"
 }
 ```
 
@@ -95,6 +99,9 @@ try {
 推荐 Host 使用当前登录用户的浏览器会话：
 
 ```ts
+const hostMessage = parsePaymentHostMessage(await agentResponse.json());
+const COMBO_PAYMENT_URL = hostConfig.paymentUrl; // Host 自己的显式配置，不来自 Agent
+
 const payments = createPaymentClient({
   paymentUrl: COMBO_PAYMENT_URL,
   auth: { kind: 'browser-session' },
@@ -110,12 +117,13 @@ const payments = createPaymentClient({
   paymentUrl: COMBO_PAYMENT_URL,
   auth: {
     kind: 'bearer',
-    getAccessToken: () => scopedCredentialProvider.getFreshToken(),
+    getAccessToken: (signal) => scopedCredentialProvider.getFreshToken({ signal }),
   },
 });
 ```
 
 不要把 `COMBO_PLATFORM_INTERNAL_TOKEN` 或任何共享内部 token 交给 Payment Client。
+Bearer 模式明确发送 `credentials: 'omit'`，不会同时携带 Cookie；浏览器会话模式才发送 `credentials: 'include'`。
 
 客户端提供四个操作：
 
@@ -129,13 +137,35 @@ const completed = await payments.waitForCompletion(created.paymentRequestId, {
 });
 ```
 
+Payment API 返回的 `PaymentView` 必须包含创建时的 `requestKey`：
+
+```json
+{
+  "paymentRequestId": "payreq_123",
+  "requestKey": "payment-create-123",
+  "status": "waiting",
+  "amount": { "currency": "CNY", "amountCents": "600" },
+  "expiresAt": "2026-09-03T10:05:00.000Z",
+  "createdAt": "2026-09-03T10:00:00.000Z",
+  "updatedAt": "2026-09-03T10:00:00.000Z",
+  "action": {
+    "kind": "open_url",
+    "url": "https://pay.combo.example/...",
+    "expiresAt": "2026-09-03T10:05:00.000Z"
+  }
+}
+```
+
+SDK 会核对 `get()` 返回的 `paymentRequestId`，以及 `create()`、`findByRequestKey()` 返回的 `requestKey`。错路由或错误缓存响应不会被接受。
+所有 GET 查询都显式发送 `Cache-Control: no-store`，不能用浏览器或中间缓存代替支付中台当前状态。
+
 对应接口为：
 
 - `POST /v1/payments`
 - `GET /v1/payments/:paymentRequestId`
 - `GET /v1/payments/by-request-key/:requestKey`
 
-成功包络固定为 `{ data, meta: { traceId } }`，错误包络固定为 `{ error: { code }, data?, meta: { traceId } }`。SDK 会检查金额、时间、状态和支付动作，不会用 `String()` 或 `Number()` 猜测错误数据。
+成功包络固定为 `{ data, meta: { traceId } }`，错误包络固定为 `{ error: { code }, data?, meta: { traceId } }`。包络、错误、状态、金额、动作和元信息均拒绝未知字段。编号只接受规范 ASCII，token 只接受至少 16 字符的 base64url 兼容字符；时间会逐字段校验真实 UTC 日期，不依赖日期自动纠正。
 
 ## 支付状态
 
@@ -146,18 +176,26 @@ const completed = await payments.waitForCompletion(created.paymentRequestId, {
 
 渠道页面显示成功不等于 `completed`。业务只能把 Combo 返回的 `completed` 当作支付侧完成，但是否继续、怎样避免业务重复执行，仍由业务决定。
 
-`waitForCompletion()` 必须给出总超时，最多十五分钟；它不会在后台无限查询。`closed` 会抛 `PaymentClosedError`，超过等待时间会抛 `PaymentWaitTimeoutError`。
+`waitForCompletion()` 必须给出总超时，最多十五分钟；它不会在后台无限查询。查询遇到网络失败、单次超时、429 或 5xx 时，只在总时限内继续，并优先遵守服务端的 `Retry-After` / `retryAfterMs`。确定性错误立即停止。`closed` 会抛 `PaymentClosedError`，超过等待时间会抛 `PaymentWaitTimeoutError`。
 
 ## 创建结果不确定
 
-如果创建支付时网络断开或超时，服务端可能已经成功创建。SDK 会抛：
+如果创建支付时网络断开、超时，或已经收到但无法确认权威结果，服务端可能已经成功创建。SDK 会抛：
 
 ```ts
 PaymentResultUnknownError {
   requestKey: string;
-  reason: 'request_timeout' | 'network_error' | 'aborted';
+  reason:
+    | 'request_timeout'
+    | 'network_error'
+    | 'aborted'
+    | 'response_interrupted'
+    | 'invalid_response'
+    | 'server_error';
 }
 ```
+
+这包括响应正文读取中断、空或非 JSON 的成功响应、畸形 2xx、HTTP 408，以及格式正确或错误的 5xx。确定性的其他 4xx 仍返回 `PaymentApiError`。如果调用在发送 HTTP 前取消或获取凭据超时，不会标为结果不确定，也不会继续发送 POST。
 
 处理方式只有两种：
 
