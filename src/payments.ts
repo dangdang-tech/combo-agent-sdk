@@ -514,10 +514,12 @@ export function parsePaymentRequiredError(
 function parsePaymentRequirement(value: unknown): PaymentRequirement {
   const object = requireRecord(value, 'data.paymentRequirement');
   return {
-    id: parseIdentifier(object.id, 'data.paymentRequirement.id'),
-    paymentToken: parseOpaqueToken(
+    id: parseResponseSafeString(object.id, 'data.paymentRequirement.id', 1, 128),
+    paymentToken: parseResponseSafeString(
       object.paymentToken,
       'data.paymentRequirement.paymentToken',
+      1,
+      8_192,
     ),
     amount: parseMoney(object.amount, 'data.paymentRequirement.amount'),
     expiresAt: parseTimestamp(object.expiresAt, 'data.paymentRequirement.expiresAt'),
@@ -539,7 +541,7 @@ function parsePaymentView(value: unknown): PaymentView {
     throw invalidResponse('data.completedAt is only valid when status is completed');
   }
   return {
-    paymentRequestId: parseIdentifier(object.paymentRequestId, 'data.paymentRequestId'),
+    paymentRequestId: parseResponseSafeString(object.paymentRequestId, 'data.paymentRequestId', 1, 128),
     status,
     amount: parseMoney(object.amount, 'data.amount'),
     expiresAt: parseTimestamp(object.expiresAt, 'data.expiresAt'),
@@ -557,7 +559,7 @@ function parsePaymentAction(value: unknown): OpenUrlPaymentAction {
   }
   return {
     kind: 'open_url',
-    url: parseHttpUrl(object.url, 'data.action.url'),
+    url: parseResponseHttpUrl(object.url, 'data.action.url'),
     expiresAt: parseTimestamp(object.expiresAt, 'data.action.expiresAt'),
   };
 }
@@ -638,7 +640,7 @@ function mapServerErrorCode(status: number, serverCode: string): PaymentApiError
 
 function parseMeta(value: unknown): { traceId: string } {
   const object = requireRecord(value, 'meta');
-  return { traceId: requireString(object.traceId, 'meta.traceId', 1, 256) };
+  return { traceId: parseResponseSafeString(object.traceId, 'meta.traceId', 1, 256) };
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -701,6 +703,17 @@ function parseHttpUrl(value: unknown, path: string): string {
   return text;
 }
 
+function parseResponseHttpUrl(value: unknown, path: string): string {
+  const text = parseResponseSafeString(value, path, 1, 4_096);
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported scheme');
+  } catch {
+    throw invalidResponse(`${path} must be an http(s) URL`);
+  }
+  return text;
+}
+
 function parseTimestamp(value: unknown, path: string): string {
   const text = requireString(value, path, 1, 64);
   if (!RFC3339_UTC_PATTERN.test(text) || !Number.isFinite(Date.parse(text))) {
@@ -742,6 +755,23 @@ function requireSafeString(
       `${path} must be ${minimum}-${maximum} control-free characters`,
       { status: 0, retryable: false },
     );
+  }
+  return value;
+}
+
+function parseResponseSafeString(
+  value: unknown,
+  path: string,
+  minimum: number,
+  maximum: number,
+): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < minimum ||
+    value.length > maximum ||
+    !CONTROL_FREE_PATTERN.test(value)
+  ) {
+    throw invalidResponse(`${path} must be ${minimum}-${maximum} control-free characters`);
   }
   return value;
 }

@@ -260,6 +260,21 @@ describe('payment client', () => {
     expect(failure).toMatchObject({ code: 'invalid_response', retryable: false });
   });
 
+  it('classifies malformed Combo actions and identifiers as invalid responses', async () => {
+    const badAction = paymentClient(async () =>
+      ok({
+        ...paymentData(),
+        action: { kind: 'open_url', url: 'javascript:alert(1)', expiresAt: LATER },
+      }),
+    );
+    await expect(badAction.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+
+    const badId = paymentClient(async () =>
+      ok({ ...paymentData('processing'), paymentRequestId: 'bad\nvalue' }),
+    );
+    await expect(badId.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
   it('does not send requests when local ids are unsafe', async () => {
     let calls = 0;
     const client = paymentClient(async () => {
