@@ -10,7 +10,6 @@ const ENV = {
   COMBO_PLATFORM_INTERNAL_TOKEN: TEST_CREDENTIAL,
   COMBO_LLM_GATEWAY_URL: 'http://gateway:4103/',
   COMBO_BILLING_URL: 'http://billing:4102',
-  COMBO_PAYMENT_URL: 'http://billing:4102/',
   COMBO_JWKS_URL: 'http://authz:4101/.well-known/jwks.json',
 };
 
@@ -19,7 +18,6 @@ describe('loadAgentSdkConfig', () => {
     const config = loadAgentSdkConfig(ENV);
     expect(config.agentId).toBe('agent-a');
     expect(config.llmGatewayUrl).toBe('http://gateway:4103');
-    expect(config.paymentUrl).toBe('http://billing:4102');
     expect(config.assertionIssuer).toBeUndefined();
   });
 
@@ -31,7 +29,6 @@ describe('loadAgentSdkConfig', () => {
       'COMBO_PLATFORM_INTERNAL_TOKEN',
       'COMBO_LLM_GATEWAY_URL',
       'COMBO_BILLING_URL',
-      'COMBO_PAYMENT_URL',
       'COMBO_JWKS_URL',
     ]);
   });
@@ -136,6 +133,28 @@ describe('llm client', () => {
         messages: [{ role: 'user', content: 'hi' }],
       }),
     ).rejects.toThrow(/must match/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects path segments and non-ASCII call identifiers before dispatch', async () => {
+    const { fetchImpl, calls } = captureFetch(() => new Response('{}', { status: 200 }));
+    const client = createLlmClient({ ...options, fetchImpl });
+    for (const callId of [
+      '.',
+      '..',
+      'call/other',
+      `call${String.fromCharCode(0x85)}other`,
+      'e\u0301',
+      '\ud800',
+    ]) {
+      await expect(
+        client.chatCompletion({
+          userId: 'user-1',
+          callId,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      ).rejects.toThrow(/canonical ASCII/);
+    }
     expect(calls).toHaveLength(0);
   });
 
