@@ -209,6 +209,33 @@ describe('typed payment required errors', () => {
     for (const body of variants) expect(parsePaymentRequiredError(402, body)).toBeNull();
   });
 
+  it('rejects log-control characters in server error messages', async () => {
+    for (const unsafe of [
+      `bad${String.fromCharCode(0x85)}message`,
+      'bad\u202Emessage',
+      'bad\ud800message',
+      'bad\u2028message',
+    ]) {
+      expect(
+        parsePaymentRequiredError(402, {
+          ...standard402,
+          error: { code: 'payment_required', message: unsafe },
+        }),
+      ).toBeNull();
+
+      const client = paymentClient(async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: 'conflict', message: unsafe },
+            meta: { traceId: TRACE_ID },
+          }),
+          { status: 409 },
+        ),
+      );
+      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+    }
+  });
+
   it('strictly parses Host messages before payment creation', () => {
     const valid = {
       version: 1,

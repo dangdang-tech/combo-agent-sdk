@@ -342,7 +342,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_WAIT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
-const CONTROL_FREE_PATTERN = /^[^\u0000-\u001f\u007f]+$/u;
+const FORBIDDEN_MESSAGE_CHAR_PATTERN = /[\p{Cc}\p{Cs}\p{Cf}\u2028\u2029]/u;
 const ASCII_IDENTIFIER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
 const PAYMENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 const VISIBLE_ASCII_PATTERN = /^[\x21-\x7e]+$/;
@@ -1163,7 +1163,7 @@ function optionalSafeString(
     typeof value !== 'string' ||
     value.length < minimum ||
     value.length > maximum ||
-    !CONTROL_FREE_PATTERN.test(value)
+    FORBIDDEN_MESSAGE_CHAR_PATTERN.test(value)
   ) {
     throw invalidResponse(`${path} is malformed`);
   }
