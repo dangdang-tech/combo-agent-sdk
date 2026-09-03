@@ -50,7 +50,7 @@ function apiError(status: number, code: string): Response {
 function paymentClient(fetchImpl: (input: string, init?: RequestInit) => Promise<Response>) {
   return createPaymentClient({
     paymentUrl: 'https://billing.combo.test/',
-    getAccessToken: () => AGENT_CREDENTIAL,
+    auth: { kind: 'bearer', getAccessToken: () => AGENT_CREDENTIAL },
     fetchImpl,
   });
 }
@@ -187,6 +187,36 @@ describe('payment client', () => {
       paymentToken: PAYMENT_CREDENTIAL,
       requestKey: 'request-key-1',
     });
+  });
+
+  it('uses the current browser session without adding an Authorization header', async () => {
+    let captured: RequestInit | undefined;
+    const client = createPaymentClient({
+      paymentUrl: 'https://billing.combo.test',
+      auth: { kind: 'browser-session' },
+      fetchImpl: async (_url, init) => {
+        captured = init;
+        return ok(paymentData());
+      },
+    });
+
+    await client.get(PAYMENT_ID);
+    expect(captured?.credentials).toBe('include');
+    expect(new Headers(captured?.headers).has('authorization')).toBe(false);
+  });
+
+  it('rejects missing or ambiguous auth modes before any request', () => {
+    expect(() =>
+      createPaymentClient({
+        paymentUrl: 'https://billing.combo.test',
+      } as never),
+    ).toThrow(/auth mode is required/);
+    expect(() =>
+      createPaymentClient({
+        paymentUrl: 'https://billing.combo.test',
+        auth: { kind: 'browser-session', getAccessToken: () => AGENT_CREDENTIAL },
+      } as never),
+    ).toThrow(/cannot include getAccessToken/);
   });
 
   it('queries by payment id and recovers by the original request key', async () => {

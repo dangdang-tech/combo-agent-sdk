@@ -230,15 +230,30 @@ interface FetchLike {
   (input: string, init?: RequestInit): Promise<Response>;
 }
 
-export interface PaymentClientOptions {
+interface PaymentClientOptionsBase {
   /** apps/billing 暴露的 Combo 支付 API 根地址。 */
   paymentUrl: string;
-  /** 每次请求前获取 Agent 的短期、限权凭据。SDK 不保存凭据。 */
-  getAccessToken: () => string | Promise<string>;
   fetchImpl?: FetchLike;
   /** 单次请求默认上限，默认十秒，最多两分钟。 */
   requestTimeoutMs?: number;
 }
+
+export interface BrowserSessionPaymentAuth {
+  /** Combo Host 使用当前登录用户的浏览器会话，SDK 不发送 Authorization。 */
+  kind: 'browser-session';
+  getAccessToken?: never;
+}
+
+export interface BearerPaymentAuth {
+  /** 仅用于平台签发的短期、限权服务端凭据；不得使用共享内部 token。 */
+  kind: 'bearer';
+  /** 每次请求前重新获取。SDK 不保存凭据。 */
+  getAccessToken: () => string | Promise<string>;
+}
+
+export type PaymentClientOptions = PaymentClientOptionsBase & {
+  auth: BrowserSessionPaymentAuth | BearerPaymentAuth;
+};
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
@@ -250,6 +265,7 @@ const RFC3339_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z
 
 export function createPaymentClient(options: PaymentClientOptions): PaymentClient {
   const paymentUrl = parseHttpUrl(options.paymentUrl, 'paymentUrl').replace(/\/+$/, '');
+  const auth = parsePaymentAuth(options.auth);
   const fetchImpl =
     options.fetchImpl ?? ((input: string, init?: RequestInit) => globalThis.fetch(input, init));
   const defaultTimeoutMs = parseDuration(
@@ -273,16 +289,22 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
       });
     }
 
-    let accessToken: string;
-    try {
-      accessToken = parseAccessToken(await options.getAccessToken());
-    } catch (cause) {
-      if (cause instanceof PaymentApiError) throw cause;
-      throw new PaymentApiError('credential_error', 'could not obtain a payment API credential', {
-        status: 0,
-        retryable: false,
-        cause,
-      });
+    let authorization: string | undefined;
+    if (auth.kind === 'bearer') {
+      try {
+        authorization = `Bearer ${parseAccessToken(await auth.getAccessToken())}`;
+      } catch (cause) {
+        if (cause instanceof PaymentApiError) throw cause;
+        throw new PaymentApiError(
+          'credential_error',
+          'could not obtain a payment API credential',
+          {
+            status: 0,
+            retryable: false,
+            cause,
+          },
+        );
+      }
     }
 
     const timeoutMs = parseDuration(
@@ -305,8 +327,9 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
         ...init,
         headers: {
           ...headersToRecord(init.headers),
-          authorization: `Bearer ${accessToken}`,
+          ...(authorization ? { authorization } : {}),
         },
+        ...(auth.kind === 'browser-session' ? { credentials: 'include' } : {}),
         signal: controller.signal,
       });
     } catch (cause) {
@@ -439,6 +462,34 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
       }
     },
   };
+}
+
+function parsePaymentAuth(
+  value: BrowserSessionPaymentAuth | BearerPaymentAuth,
+): BrowserSessionPaymentAuth | BearerPaymentAuth {
+  if (!isRecord(value)) {
+    throw new PaymentApiError('invalid_request', 'auth mode is required', {
+      status: 0,
+      retryable: false,
+    });
+  }
+  if (value.kind === 'browser-session') {
+    if (Object.prototype.hasOwnProperty.call(value, 'getAccessToken')) {
+      throw new PaymentApiError(
+        'invalid_request',
+        'browser-session auth cannot include getAccessToken',
+        { status: 0, retryable: false },
+      );
+    }
+    return { kind: 'browser-session' };
+  }
+  if (value.kind === 'bearer' && typeof value.getAccessToken === 'function') {
+    return { kind: 'bearer', getAccessToken: value.getAccessToken as () => string | Promise<string> };
+  }
+  throw new PaymentApiError('invalid_request', 'auth must select one supported mode', {
+    status: 0,
+    retryable: false,
+  });
 }
 
 /** llm client 内部使用：只有完整符合标准合同的 402 才升级为类型化错误。 */

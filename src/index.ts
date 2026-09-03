@@ -35,6 +35,8 @@ export {
   createPaymentClient,
   createPaymentHostMessage,
   type CreatePaymentInput,
+  type BearerPaymentAuth,
+  type BrowserSessionPaymentAuth,
   type Money,
   type OpenUrlPaymentAction,
   type PaymentApiErrorCode,
