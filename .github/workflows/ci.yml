@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 20
+          - 24
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.9
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check production types
+        run: pnpm typecheck
+
+      - name: Check test types
+        run: pnpm typecheck:test
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Build SDK
+        run: pnpm build
+
+      - name: Run package preflight
+        run: pnpm prepack
+
+      - name: Check Reference Agent types
+        run: pnpm --filter combo-reference-agent typecheck
+
+      - name: Build Reference Agent
+        run: pnpm --filter combo-reference-agent build
+
+      - name: Verify package contents
+        env:
+          PACK_REPORT: ${{ runner.temp }}/combo-agent-sdk-pack.json
+        run: |
+          npm pack --dry-run --json --ignore-scripts > "$PACK_REPORT"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const report = JSON.parse(readFileSync(process.env.PACK_REPORT, 'utf8'));
+          const files = new Set(report[0]?.files?.map(({ path }) => path) ?? []);
+          const required = [
+            'AGENT.md',
+            'PAYMENT_SDK_INTEGRATION.md',
+            'dist/index.js',
+            'dist/index.d.ts',
+            'templates/nextjs-agent/README.md',
+            'templates/nextjs-agent/package.json',
+            'templates/nextjs-agent/app/api/chat/route.ts',
+            'templates/nextjs-agent/app/api/healthz/route.ts',
+            'templates/nextjs-agent/app/api/operations/[operationId]/resume/route.ts',
+            'templates/nextjs-agent/lib/operation-store.ts',
+          ];
+          const missing = required.filter((path) => !files.has(path));
+          const forbidden = [...files].filter((path) =>
+            /(^|\/)(?:\.next|node_modules)(?:\/|$)/.test(path),
+          );
+
+          if (missing.length > 0 || forbidden.length > 0) {
+            console.error(JSON.stringify({ missing, forbidden }, null, 2));
+            process.exit(1);
+          }
+          NODE

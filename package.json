@@ -2,6 +2,7 @@
   "name": "combo-agent-sdk",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.0.9",
   "description": "Combo Agent 运行时 SDK：身份断言、模型网关、钱包读模型与托管支付客户端。",
   "type": "module",
   "main": "./dist/index.js",

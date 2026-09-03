@@ -165,6 +165,8 @@ const payment = await payments.create({
 
 ## 开发
 
+仓库固定使用 pnpm `11.0.9`。拉取请求和 `main` 更新会在 Node.js 20、24 上执行同一套只读 CI 门禁。
+
 ```bash
 pnpm install        # 或 npm install
 pnpm typecheck      # 生产代码类型检查（tsc -b）
