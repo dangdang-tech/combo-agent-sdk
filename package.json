@@ -13,10 +13,24 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "PAYMENT_SDK_INTEGRATION.md",
+    "AGENT.md",
+    "templates/nextjs-agent/.env.example",
+    "templates/nextjs-agent/README.md",
+    "templates/nextjs-agent/agent.yaml",
+    "templates/nextjs-agent/app",
+    "templates/nextjs-agent/lib",
+    "templates/nextjs-agent/next-env.d.ts",
+    "templates/nextjs-agent/package.json",
+    "templates/nextjs-agent/tsconfig.json"
   ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "build": "tsc -b",
+    "prepare": "tsc -b",
     "prepack": "tsc -b",
     "typecheck": "tsc -b --noEmit false",
     "typecheck:test": "tsc -p tsconfig.vitest.json",

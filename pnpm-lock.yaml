@@ -25,7 +25,7 @@ importers:
   templates/nextjs-agent:
     dependencies:
       combo-agent-sdk:
-        specifier: workspace:*
+        specifier: file:../..
         version: link:../..
       next:
         specifier: 16.3.4
