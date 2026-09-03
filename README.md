@@ -55,7 +55,7 @@ npm install /path/to/artifacts/combo-agent-sdk-0.1.0.tgz
 | 环境变量 | 说明 |
 | --- | --- |
 | `COMBO_AGENT_ID` | 本 Agent 的平台标识，断言验签强制 aud 等于它 |
-| `COMBO_PLATFORM_INTERNAL_TOKEN` | 现有 LLM/钱包服务端凭据（≥16 字符）；Payment Client 禁止使用 |
+| `COMBO_PLATFORM_INTERNAL_TOKEN` | 当前仅限受控验证的共享 LLM/钱包内部凭据；Payment Client 禁止使用，不能对外部署 |
 | `COMBO_LLM_GATEWAY_URL` | 模型网关地址 |
 | `COMBO_BILLING_URL` | 计费服务地址 |
 | `COMBO_JWKS_URL` | authz 的 JWKS 端点 |

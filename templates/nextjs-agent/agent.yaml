@@ -11,8 +11,9 @@ resources:
   request: { cpu: 250m, memory: 256Mi }
   limit: { cpu: 500m, memory: 512Mi }
 
-# 环境变量只声明名字，值存平台 k8s Secret，Git 不落值。
-# COMBO_PLATFORM_INTERNAL_TOKEN 由平台按 agent 签发，可单独吊销。
+# 环境变量只声明名字，值存平台 Secret，Git 不落真实值。
+# 当前 COMBO_PLATFORM_INTERNAL_TOKEN 仍是验证期共享内部凭据，只能用于受控环境，
+# 不能对外安全使用。目标 per-Agent、短期、限权凭据尚待 Combo 后端实现。
 env:
   - COMBO_AGENT_ID
   - COMBO_PLATFORM_INTERNAL_TOKEN
