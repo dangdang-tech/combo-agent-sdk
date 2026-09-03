@@ -10,6 +10,8 @@ export interface AgentSdkConfig {
   llmGatewayUrl: string;
   /** 计费服务地址（钱包读模型）。 */
   billingUrl: string;
+  /** Combo 支付中台地址。 */
+  paymentUrl: string;
   /** authz 的 JWKS 端点。 */
   jwksUrl: string;
   /** 配置后验签同时强制 issuer。 */
@@ -33,6 +35,7 @@ const REQUIRED_VARS = [
   'COMBO_PLATFORM_INTERNAL_TOKEN',
   'COMBO_LLM_GATEWAY_URL',
   'COMBO_BILLING_URL',
+  'COMBO_PAYMENT_URL',
   'COMBO_JWKS_URL',
 ] as const;
 
@@ -62,6 +65,7 @@ export function loadAgentSdkConfig(env: EnvLike = process.env): AgentSdkConfig {
     internalToken,
     llmGatewayUrl: stripTrailingSlash(env.COMBO_LLM_GATEWAY_URL!, 'COMBO_LLM_GATEWAY_URL'),
     billingUrl: stripTrailingSlash(env.COMBO_BILLING_URL!, 'COMBO_BILLING_URL'),
+    paymentUrl: stripTrailingSlash(env.COMBO_PAYMENT_URL!, 'COMBO_PAYMENT_URL'),
     jwksUrl: env.COMBO_JWKS_URL!,
     ...(env.COMBO_ASSERTION_ISSUER ? { assertionIssuer: env.COMBO_ASSERTION_ISSUER } : {}),
   };
