@@ -18,10 +18,12 @@ env:
   - COMBO_PLATFORM_INTERNAL_TOKEN
   - COMBO_LLM_GATEWAY_URL
   - COMBO_BILLING_URL
+  - COMBO_PAYMENT_URL
   - COMBO_JWKS_URL
 
-# 声明用到的平台能力，是切面注入点。本模板用到 llm 与 entitlement；
+# 声明用到的平台能力，是切面注入点。本模板用到 llm、entitlement 与 payment；
 # storage 能力在 Agent 真正接入托管存储时再声明。
 capabilities:
   - llm
   - entitlement
+  - payment

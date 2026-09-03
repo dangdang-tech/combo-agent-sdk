@@ -1,0 +1,26 @@
+{
+  "name": "combo-reference-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare:sdk": "pnpm --dir ../.. build",
+    "predev": "pnpm run prepare:sdk",
+    "dev": "next dev",
+    "prebuild": "pnpm run prepare:sdk",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "combo-agent-sdk": "workspace:*",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}
