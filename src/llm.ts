@@ -57,7 +57,7 @@ export interface LlmClientOptions {
   defaultModel?: string;
 }
 
-const CONTROL_FREE_PATTERN = /^[^\u0000-\u001f\u007f]+$/u;
+const CALL_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
 
 function buildGatewayBody(
   input: ChatCompletionInput,
@@ -89,8 +89,8 @@ function resolveCallId(callId: string | undefined, turnId: string | undefined): 
     throw new LlmGatewayError(0, null, 'callId and deprecated turnId must match');
   }
   const resolved = callId ?? turnId!;
-  if (resolved.length > 128 || !CONTROL_FREE_PATTERN.test(resolved)) {
-    throw new LlmGatewayError(0, null, 'callId must be 1-128 control-free characters');
+  if (!CALL_ID_PATTERN.test(resolved)) {
+    throw new LlmGatewayError(0, null, 'callId must use the canonical ASCII identifier format');
   }
   return resolved;
 }
