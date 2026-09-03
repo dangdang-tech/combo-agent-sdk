@@ -165,10 +165,10 @@ const payment = await payments.create({
 
 ## 开发
 
-仓库固定使用 pnpm `11.0.9`。拉取请求和 `main` 更新会在 Node.js 20、24 上执行同一套只读 CI 门禁。
+仓库固定使用 pnpm `11.0.9`，它本身要求 Node.js `>=22.13`，因此依赖安装使用 Node.js 24。安装完成后，拉取请求和 `main` 更新会分别在 Node.js 20、24 上执行同一套 SDK、测试、Reference Agent 和打包门禁。
 
 ```bash
-pnpm install        # 或 npm install
+pnpm install --frozen-lockfile
 pnpm typecheck      # 生产代码类型检查（tsc -b）
 pnpm typecheck:test # 测试代码类型检查
 pnpm test           # vitest，全部使用内存桩

@@ -34,35 +34,45 @@ jobs:
           version: 11.0.9
           run_install: false
 
-      - name: Set up Node.js
+      # pnpm 11 itself needs Node >=22.13. Install the locked dependency graph
+      # under Node 24, then execute every project gate under the runtime matrix.
+      - name: Set up dependency toolchain
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: pnpm
 
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set up tested Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Confirm tested runtime
+        run: node --version
+
       - name: Check production types
-        run: pnpm typecheck
+        run: npm run typecheck
 
       - name: Check test types
-        run: pnpm typecheck:test
+        run: npm run typecheck:test
 
       - name: Run unit tests
-        run: pnpm test
+        run: npm test
 
       - name: Build SDK
-        run: pnpm build
+        run: npm run build
 
       - name: Run package preflight
-        run: pnpm prepack
+        run: npm run prepack
 
       - name: Check Reference Agent types
-        run: pnpm --filter combo-reference-agent typecheck
+        run: npm --prefix templates/nextjs-agent run typecheck
 
       - name: Build Reference Agent
-        run: pnpm --filter combo-reference-agent build
+        run: npm --prefix templates/nextjs-agent run build
 
       - name: Verify package contents
         env:

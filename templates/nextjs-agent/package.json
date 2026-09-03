@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "prepare:sdk": "pnpm --dir ../.. build",
-    "predev": "pnpm run prepare:sdk",
+    "prepare:sdk": "npm --prefix ../.. run build",
+    "predev": "npm run prepare:sdk",
     "dev": "next dev",
-    "prebuild": "pnpm run prepare:sdk",
+    "prebuild": "npm run prepare:sdk",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
