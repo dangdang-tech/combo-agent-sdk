@@ -3,11 +3,14 @@ import { AgentSdkConfigError, loadAgentSdkConfig } from '../config.js';
 import { EntitlementError, createEntitlementClient } from '../entitlement.js';
 import { LlmGatewayError, createLlmClient } from '../llm.js';
 
+const TEST_CREDENTIAL = `test-${'credential'.repeat(2)}`;
+
 const ENV = {
   COMBO_AGENT_ID: 'agent-a',
-  COMBO_PLATFORM_INTERNAL_TOKEN: 'internal-token-0123456789',
+  COMBO_PLATFORM_INTERNAL_TOKEN: TEST_CREDENTIAL,
   COMBO_LLM_GATEWAY_URL: 'http://gateway:4103/',
   COMBO_BILLING_URL: 'http://billing:4102',
+  COMBO_PAYMENT_URL: 'http://billing:4102/',
   COMBO_JWKS_URL: 'http://authz:4101/.well-known/jwks.json',
 };
 
@@ -16,6 +19,7 @@ describe('loadAgentSdkConfig', () => {
     const config = loadAgentSdkConfig(ENV);
     expect(config.agentId).toBe('agent-a');
     expect(config.llmGatewayUrl).toBe('http://gateway:4103');
+    expect(config.paymentUrl).toBe('http://billing:4102');
     expect(config.assertionIssuer).toBeUndefined();
   });
 
@@ -27,6 +31,7 @@ describe('loadAgentSdkConfig', () => {
       'COMBO_PLATFORM_INTERNAL_TOKEN',
       'COMBO_LLM_GATEWAY_URL',
       'COMBO_BILLING_URL',
+      'COMBO_PAYMENT_URL',
       'COMBO_JWKS_URL',
     ]);
   });
@@ -67,13 +72,12 @@ function captureFetch(response: () => Response | Promise<Response>) {
 describe('llm client', () => {
   const options = {
     gatewayUrl: 'http://gateway:4103',
-    internalToken: 'internal-token-0123456789',
+    internalToken: TEST_CREDENTIAL,
     agentId: 'agent-a',
     defaultModel: 'deepseek-chat',
-    randomId: () => 'generated-turn-id',
   };
 
-  it('injects x_combo with an auto turn id and maps maxTokens to max_tokens', async () => {
+  it('maps a stable call id to the current turn_id wire field', async () => {
     const { fetchImpl, calls } = captureFetch(
       () => new Response('{"id":"chatcmpl-1"}', { status: 200 }),
     );
@@ -81,6 +85,7 @@ describe('llm client', () => {
 
     const result = await client.chatCompletion({
       userId: 'user-1',
+      callId: 'call-1',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 512,
       temperature: 0.5,
@@ -90,14 +95,14 @@ describe('llm client', () => {
     const request = calls[0]!;
     expect(request.url).toBe('http://gateway:4103/v1/chat/completions');
     expect(request.init?.headers).toMatchObject({
-      authorization: 'Bearer internal-token-0123456789',
+      authorization: `Bearer ${TEST_CREDENTIAL}`,
     });
     expect(request.body).toEqual({
       model: 'deepseek-chat',
       messages: [{ role: 'user', content: 'hi' }],
       temperature: 0.5,
       max_tokens: 512,
-      x_combo: { user_id: 'user-1', agent_id: 'agent-a', turn_id: 'generated-turn-id' },
+      x_combo: { user_id: 'user-1', agent_id: 'agent-a', turn_id: 'call-1' },
     });
   });
 
@@ -113,6 +118,27 @@ describe('llm client', () => {
     expect((calls[0]!.body as { x_combo: { turn_id: string } }).x_combo.turn_id).toBe('my-turn');
   });
 
+  it('requires a stable call id and rejects disagreeing legacy aliases', async () => {
+    const { fetchImpl, calls } = captureFetch(() => new Response('{}', { status: 200 }));
+    const client = createLlmClient({ ...options, fetchImpl });
+
+    await expect(
+      client.chatCompletion({
+        userId: 'user-1',
+        messages: [{ role: 'user', content: 'hi' }],
+      } as never),
+    ).rejects.toThrow(/callId is required/);
+    await expect(
+      client.chatCompletion({
+        userId: 'user-1',
+        callId: 'call-1',
+        turnId: 'turn-2',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).rejects.toThrow(/must match/);
+    expect(calls).toHaveLength(0);
+  });
+
   it('throws LlmGatewayError with status and body on 402', async () => {
     const { fetchImpl } = captureFetch(
       () => new Response(JSON.stringify({ error: { code: 'payment_required' } }), { status: 402 }),
@@ -120,7 +146,11 @@ describe('llm client', () => {
     const client = createLlmClient({ ...options, fetchImpl });
 
     const failure = await client
-      .chatCompletion({ userId: 'user-1', messages: [{ role: 'user', content: 'hi' }] })
+      .chatCompletion({
+        userId: 'user-1',
+        callId: 'call-1',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(LlmGatewayError);
     expect((failure as LlmGatewayError).status).toBe(402);
@@ -134,7 +164,11 @@ describe('llm client', () => {
     const client = createLlmClient({ ...options, fetchImpl });
 
     const failure = await client
-      .chatCompletionStream({ userId: 'user-1', messages: [{ role: 'user', content: 'hi' }] })
+      .chatCompletionStream({
+        userId: 'user-1',
+        callId: 'call-1',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(LlmGatewayError);
     expect((failure as LlmGatewayError).status).toBe(500);
@@ -160,7 +194,7 @@ describe('entitlement client', () => {
     );
     const client = createEntitlementClient({
       billingUrl: 'http://billing:4102',
-      internalToken: 'internal-token-0123456789',
+      internalToken: TEST_CREDENTIAL,
       fetchImpl,
     });
 
@@ -174,7 +208,7 @@ describe('entitlement client', () => {
     });
     expect(calls[0]!.url).toBe('http://billing:4102/billing/wallets/user-1');
     expect(calls[0]!.init?.headers).toMatchObject({
-      authorization: 'Bearer internal-token-0123456789',
+      authorization: `Bearer ${TEST_CREDENTIAL}`,
     });
   });
 
@@ -182,7 +216,7 @@ describe('entitlement client', () => {
     const { fetchImpl } = captureFetch(() => new Response('down', { status: 503 }));
     const client = createEntitlementClient({
       billingUrl: 'http://billing:4102',
-      internalToken: 'internal-token-0123456789',
+      internalToken: TEST_CREDENTIAL,
       fetchImpl,
     });
     await expect(client.check('user-1')).rejects.toBeInstanceOf(EntitlementError);
