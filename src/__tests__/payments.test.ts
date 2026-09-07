@@ -21,14 +21,9 @@ const AGENT_CREDENTIAL = `agent-${'credential'.repeat(2)}`;
 const NOW = '2026-09-03T10:00:00.000Z';
 const LATER = '2026-09-03T10:05:00.000Z';
 
-function paymentData(
-  status: PaymentStatus = 'waiting',
-  requestKey = 'request-key-1',
-  paymentRequestId = PAYMENT_ID,
-) {
+function paymentData(status: PaymentStatus = 'waiting', paymentRequestId = PAYMENT_ID) {
   return {
     paymentRequestId,
-    requestKey,
     status,
     amount: { currency: 'CNY', amountCents: '600' },
     expiresAt: LATER,
@@ -36,7 +31,13 @@ function paymentData(
     updatedAt: NOW,
     ...(status === 'completed' ? { completedAt: NOW } : {}),
     ...(status === 'waiting'
-      ? { action: { kind: 'open_url', url: 'https://pay.combo.test/p/payreq-1', expiresAt: LATER } }
+      ? {
+          action: {
+            kind: 'open_url',
+            url: 'https://pay.combo.test/p/payreq-1',
+            expiresAt: LATER,
+          },
+        }
       : {}),
   };
 }
@@ -50,7 +51,14 @@ function ok(data: unknown, status = 200): Response {
 
 function apiError(status: number, code: string): Response {
   return new Response(
-    JSON.stringify({ error: { code, message: code }, meta: { traceId: TRACE_ID } }),
+    JSON.stringify({
+      error: {
+        userMessage: code,
+        retriable: false,
+        action: 'none',
+        traceId: TRACE_ID,
+      },
+    }),
     { status, headers: { 'content-type': 'application/json' } },
   );
 }
@@ -65,16 +73,18 @@ function paymentClient(fetchImpl: (input: string, init?: RequestInit) => Promise
 
 describe('typed payment required errors', () => {
   const standard402 = {
-    error: { code: 'payment_required', message: 'balance is insufficient' },
-    data: {
-      paymentRequirement: {
+    error: {
+      userMessage: '余额不足，请完成支付后继续。',
+      retriable: false,
+      action: 'wait',
+      traceId: TRACE_ID,
+      payment: {
         id: PAYMENT_ID,
         paymentToken: PAYMENT_CREDENTIAL,
         amount: { currency: 'CNY', amountCents: '600' },
         expiresAt: LATER,
       },
     },
-    meta: { traceId: TRACE_ID },
   };
 
   it('upgrades standard non-streaming 402 responses without breaking old catches', async () => {
@@ -83,7 +93,7 @@ describe('typed payment required errors', () => {
       internalToken: AGENT_CREDENTIAL,
       agentId: 'agent-a',
       defaultModel: 'test-model',
-      fetchImpl: async () => new Response(JSON.stringify(standard402), { status: 402 }),
+      fetchImpl: async () => Response.json(standard402, { status: 402 }),
     });
 
     const failure = await client
@@ -112,7 +122,7 @@ describe('typed payment required errors', () => {
       internalToken: AGENT_CREDENTIAL,
       agentId: 'agent-a',
       defaultModel: 'test-model',
-      fetchImpl: async () => new Response(JSON.stringify(standard402), { status: 402 }),
+      fetchImpl: async () => Response.json(standard402, { status: 402 }),
     });
 
     await expect(
@@ -131,7 +141,9 @@ describe('typed payment required errors', () => {
       agentId: 'agent-a',
       defaultModel: 'test-model',
       fetchImpl: async () =>
-        new Response(JSON.stringify({ error: { code: 'payment_required' } }), { status: 402 }),
+        new Response(JSON.stringify({ error: { code: 'payment_required' } }), {
+          status: 402,
+        }),
     });
 
     const failure = await client
@@ -147,7 +159,7 @@ describe('typed payment required errors', () => {
 
   it('creates a minimal Host message with no amount, address, or ids', () => {
     const error = new PaymentRequiredError(
-      standard402.data.paymentRequirement as {
+      standard402.error.payment as {
         id: string;
         paymentToken: string;
         amount: { currency: 'CNY'; amountCents: string };
@@ -168,11 +180,7 @@ describe('typed payment required errors', () => {
   it('keeps tokens and amounts out of default serialization and error inspection', () => {
     const parsed = parsePaymentRequiredError(402, standard402);
     expect(parsed).toBeInstanceOf(PaymentRequiredError);
-    expect(parsed?.body).toEqual({
-      error: { code: 'payment_required' },
-      data: { paymentRequirement: { id: PAYMENT_ID, expiresAt: LATER } },
-      meta: { traceId: TRACE_ID },
-    });
+    expect(parsed?.body).toBeNull();
     expect(Object.getOwnPropertyDescriptor(parsed, 'body')?.enumerable).toBe(false);
     expect(JSON.stringify(parsed)).not.toContain(PAYMENT_CREDENTIAL);
     expect(JSON.stringify(parsed)).not.toContain('amountCents');
@@ -182,31 +190,35 @@ describe('typed payment required errors', () => {
   });
 
   it('rejects unknown fields at every level of a standard 402', () => {
-    const variants: unknown[] = [
+    const variants = [
       { ...standard402, extra: true },
       { ...standard402, error: { ...standard402.error, extra: true } },
-      { ...standard402, data: { ...standard402.data, extra: true } },
       {
         ...standard402,
-        data: {
-          paymentRequirement: {
-            ...standard402.data.paymentRequirement,
+        error: {
+          ...standard402.error,
+          payment: {
+            ...standard402.error.payment,
             checkoutUrl: 'https://attacker.invalid',
           },
         },
       },
       {
         ...standard402,
-        data: {
-          paymentRequirement: {
-            ...standard402.data.paymentRequirement,
-            amount: { ...standard402.data.paymentRequirement.amount, extra: true },
+        error: {
+          ...standard402.error,
+          payment: {
+            ...standard402.error.payment,
+            amount: { ...standard402.error.payment.amount, extra: true },
           },
         },
       },
-      { ...standard402, meta: { ...standard402.meta, extra: true } },
+      { ...standard402, meta: { traceId: TRACE_ID } },
+      { ...standard402, error: { ...standard402.error, retriable: true } },
+      { ...standard402, error: { ...standard402.error, action: 'retry' } },
     ];
     for (const body of variants) expect(parsePaymentRequiredError(402, body)).toBeNull();
+    expect(parsePaymentRequiredError(500, standard402)).toBeNull();
   });
 
   it('rejects log-control characters in server error messages', async () => {
@@ -219,20 +231,27 @@ describe('typed payment required errors', () => {
       expect(
         parsePaymentRequiredError(402, {
           ...standard402,
-          error: { code: 'payment_required', message: unsafe },
+          error: { ...standard402.error, userMessage: unsafe },
         }),
       ).toBeNull();
 
-      const client = paymentClient(async () =>
-        new Response(
-          JSON.stringify({
-            error: { code: 'conflict', message: unsafe },
-            meta: { traceId: TRACE_ID },
-          }),
-          { status: 409 },
-        ),
+      const client = paymentClient(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                userMessage: unsafe,
+                retriable: false,
+                action: 'none',
+                traceId: TRACE_ID,
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
       );
-      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({
+        code: 'invalid_response',
+      });
     }
   });
 
@@ -269,7 +288,6 @@ describe('payment client', () => {
 
     expect(payment).toMatchObject({
       paymentRequestId: PAYMENT_ID,
-      requestKey: 'request-key-1',
       status: 'waiting',
       amount: { currency: 'CNY', amountCents: '600' },
       action: { kind: 'open_url', url: 'https://pay.combo.test/p/payreq-1' },
@@ -311,7 +329,10 @@ describe('payment client', () => {
     expect(() =>
       createPaymentClient({
         paymentUrl: 'https://billing.combo.test',
-        auth: { kind: 'browser-session', getAccessToken: () => AGENT_CREDENTIAL },
+        auth: {
+          kind: 'browser-session',
+          getAccessToken: () => AGENT_CREDENTIAL,
+        },
       } as never),
     ).toThrow(/unknown field/);
   });
@@ -357,22 +378,33 @@ describe('payment client', () => {
     );
     const failure = await client.get(PAYMENT_ID).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(PaymentApiError);
-    expect(failure).toMatchObject({ code: 'invalid_response', retryable: false });
+    expect(failure).toMatchObject({
+      code: 'invalid_response',
+      retryable: false,
+    });
   });
 
   it('classifies malformed Combo actions and identifiers as invalid responses', async () => {
     const badAction = paymentClient(async () =>
       ok({
         ...paymentData(),
-        action: { kind: 'open_url', url: 'javascript:alert(1)', expiresAt: LATER },
+        action: {
+          kind: 'open_url',
+          url: 'javascript:alert(1)',
+          expiresAt: LATER,
+        },
       }),
     );
-    await expect(badAction.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(badAction.get(PAYMENT_ID)).rejects.toMatchObject({
+      code: 'invalid_response',
+    });
 
     const badId = paymentClient(async () =>
       ok({ ...paymentData('processing'), paymentRequestId: 'bad\nvalue' }),
     );
-    await expect(badId.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(badId.get(PAYMENT_ID)).rejects.toMatchObject({
+      code: 'invalid_response',
+    });
   });
 
   it('rejects unknown fields in success envelopes, views, actions, amounts, and metadata', async () => {
@@ -396,51 +428,61 @@ describe('payment client', () => {
       { data: paymentData(), meta: { traceId: TRACE_ID, extra: true } },
     ];
     for (const body of variants) {
-      const client = paymentClient(async () => new Response(JSON.stringify(body), { status: 200 }));
-      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
+      const client = paymentClient(async () => Response.json(body));
+      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({
+        code: 'invalid_response',
+      });
     }
   });
 
-  it('rejects unknown fields in API error envelopes, errors, and metadata', async () => {
-    const variants: unknown[] = [
-      { error: { code: 'conflict' }, meta: { traceId: TRACE_ID }, extra: true },
-      { error: { code: 'conflict', extra: true }, meta: { traceId: TRACE_ID } },
-      { error: { code: 'conflict' }, meta: { traceId: TRACE_ID, extra: true } },
-    ];
-    for (const body of variants) {
-      const client = paymentClient(async () => new Response(JSON.stringify(body), { status: 409 }));
-      const failure = await client.get(PAYMENT_ID).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(PaymentApiError);
-      expect(failure).not.toBeInstanceOf(PaymentResultUnknownError);
-      expect(failure).toMatchObject({ code: 'invalid_response', status: 409 });
+  it('rejects unknown fields in API error envelopes and errors', async () => {
+    const envelope = {
+      error: {
+        userMessage: '冲突',
+        retriable: false,
+        action: 'none',
+        traceId: TRACE_ID,
+      },
+    };
+    for (const body of [
+      { ...envelope, extra: true },
+      { ...envelope, error: { ...envelope.error, code: 'not_found' } },
+      { ...envelope, data: { retryAfterMs: 1 } },
+      { ...envelope, meta: { traceId: TRACE_ID } },
+    ]) {
+      const client = paymentClient(async () => Response.json(body, { status: 409 }));
+      await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({
+        code: 'invalid_response',
+        status: 409,
+      });
     }
   });
 
   it('rejects invalid calendar dates instead of relying on Date.parse normalization', async () => {
     const client = paymentClient(async () =>
-      ok({ ...paymentData('processing'), expiresAt: '2026-02-30T10:00:00.000Z' }),
+      ok({
+        ...paymentData('processing'),
+        expiresAt: '2026-02-30T10:00:00.000Z',
+      }),
     );
-    await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
-  });
-
-  it('rejects responses that do not match the requested id or request key', async () => {
-    const wrongId = paymentClient(async () =>
-      ok(paymentData('processing', 'request-key-1', 'payreq-other')),
-    );
-    await expect(wrongId.get(PAYMENT_ID)).rejects.toMatchObject({ code: 'invalid_response' });
-
-    const wrongKey = paymentClient(async () =>
-      ok(paymentData('processing', 'different-key-1')),
-    );
-    await expect(wrongKey.findByRequestKey('request-key-1')).rejects.toMatchObject({
+    await expect(client.get(PAYMENT_ID)).rejects.toMatchObject({
       code: 'invalid_response',
     });
+  });
 
-    const createWrongKey = paymentClient(async () =>
-      ok(paymentData('waiting', 'different-key-1'), 201),
+  it('binds get to the requested id and rejects a requestKey response echo', async () => {
+    const wrongId = paymentClient(async () => ok(paymentData('processing', 'payreq-other')));
+    await expect(wrongId.get(PAYMENT_ID)).rejects.toMatchObject({
+      code: 'invalid_response',
+    });
+    const keyEcho = paymentClient(async () =>
+      ok({ ...paymentData(), requestKey: 'request-key-1' }),
     );
+    await expect(keyEcho.findByRequestKey('request-key-1')).rejects.toMatchObject({
+      code: 'invalid_response',
+    });
     await expect(
-      createWrongKey.create({
+      keyEcho.create({
         paymentToken: PAYMENT_CREDENTIAL,
         requestKey: 'request-key-1',
       }),
@@ -453,9 +495,13 @@ describe('payment client', () => {
       calls += 1;
       return ok(paymentData());
     });
-    await expect(client.get('bad\nvalue')).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(client.get('bad\nvalue')).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
     for (const value of ['.', '..', 'a/b', `a${String.fromCharCode(0x85)}b`, 'e\u0301', '\ud800']) {
-      await expect(client.get(value)).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(client.get(value)).rejects.toMatchObject({
+        code: 'invalid_request',
+      });
     }
     for (const requestKey of ['../escape', 'request/key', `request${String.fromCharCode(0x85)}`]) {
       await expect(client.findByRequestKey(requestKey)).rejects.toMatchObject({
@@ -503,13 +549,14 @@ describe('payment client', () => {
       {
         name: 'interrupted body',
         response: () => {
-          const response = new Response(JSON.stringify({}), { status: 201 });
-          Object.defineProperty(response, 'text', {
-            value: async () => {
-              throw new TypeError('body stream reset');
-            },
-          });
-          return response;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new TypeError('body reset'));
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
         },
         reason: 'response_interrupted',
         status: 201,
@@ -537,7 +584,7 @@ describe('payment client', () => {
             { status: 201 },
           ),
         reason: 'invalid_response',
-        status: 0,
+        status: 201,
       },
       {
         name: 'HTTP 408',
@@ -562,7 +609,10 @@ describe('payment client', () => {
     for (const item of cases) {
       const client = paymentClient(async () => item.response());
       const failure = await client
-        .create({ paymentToken: PAYMENT_CREDENTIAL, requestKey: 'request-key-1' })
+        .create({
+          paymentToken: PAYMENT_CREDENTIAL,
+          requestKey: 'request-key-1',
+        })
         .catch((error: unknown) => error);
       expect(failure, item.name).toBeInstanceOf(PaymentResultUnknownError);
       expect(failure, item.name).toMatchObject({
@@ -574,10 +624,16 @@ describe('payment client', () => {
   });
 
   it('keeps deterministic 4xx create responses as PaymentApiError', async () => {
-    for (const response of [apiError(400, 'invalid_request'), new Response('bad', { status: 409 })]) {
+    for (const response of [
+      apiError(400, 'invalid_request'),
+      new Response('bad', { status: 409 }),
+    ]) {
       const client = paymentClient(async () => response.clone());
       const failure = await client
-        .create({ paymentToken: PAYMENT_CREDENTIAL, requestKey: 'request-key-1' })
+        .create({
+          paymentToken: PAYMENT_CREDENTIAL,
+          requestKey: 'request-key-1',
+        })
         .catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(PaymentApiError);
       expect(failure).not.toBeInstanceOf(PaymentResultUnknownError);
@@ -630,12 +686,17 @@ describe('payment client', () => {
       const failure = await client
         .create(
           { paymentToken: PAYMENT_CREDENTIAL, requestKey: 'request-key-1' },
-          { timeoutMs: mode === 'timeout' ? 3 : 100, signal: controller.signal },
+          {
+            timeoutMs: mode === 'timeout' ? 3 : 100,
+            signal: controller.signal,
+          },
         )
         .catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(PaymentApiError);
       expect(failure).not.toBeInstanceOf(PaymentResultUnknownError);
-      expect(failure).toMatchObject({ code: mode === 'timeout' ? 'request_timeout' : 'aborted' });
+      expect(failure).toMatchObject({
+        code: mode === 'timeout' ? 'request_timeout' : 'aborted',
+      });
       expect(credentialSignal?.aborted).toBe(true);
       expect(calls).toBe(0);
     }
@@ -645,17 +706,19 @@ describe('payment client', () => {
     const client = paymentClient(
       async (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
         }),
     );
     const failure = await client
-      .create(
-        { paymentToken: PAYMENT_CREDENTIAL, requestKey: 'request-key-1' },
-        { timeoutMs: 5 },
-      )
+      .create({ paymentToken: PAYMENT_CREDENTIAL, requestKey: 'request-key-1' }, { timeoutMs: 5 })
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(PaymentResultUnknownError);
-    expect(failure).toMatchObject({ reason: 'request_timeout', requestKey: 'request-key-1' });
+    expect(failure).toMatchObject({
+      reason: 'request_timeout',
+      requestKey: 'request-key-1',
+    });
   });
 
   it('waits through non-final states and stops at Combo-completed', async () => {
@@ -669,7 +732,7 @@ describe('payment client', () => {
     expect(states).toHaveLength(0);
   });
 
-  it('retries bounded query failures and honors retryAfterMs', async () => {
+  it('retries bounded query failures and honors Retry-After', async () => {
     let calls = 0;
     const client = paymentClient(async () => {
       calls += 1;
@@ -677,22 +740,29 @@ describe('payment client', () => {
       if (calls === 2) {
         return new Response(
           JSON.stringify({
-            error: { code: 'rate_limited' },
-            data: { retryAfterMs: 1 },
-            meta: { traceId: TRACE_ID },
+            error: {
+              userMessage: '稍后重试',
+              retriable: false,
+              action: 'none',
+              traceId: TRACE_ID,
+            },
           }),
-          { status: 429 },
+          {
+            status: 429,
+            headers: { 'content-type': 'application/json', 'retry-after': '0' },
+          },
         );
       }
       if (calls === 3) return new Response('temporary bad gateway body', { status: 503 });
       if (calls === 4) {
-        const response = ok(paymentData('processing'));
-        Object.defineProperty(response, 'text', {
-          value: async () => {
-            throw new TypeError('response stream reset');
-          },
-        });
-        return response;
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new TypeError('body reset'));
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
       }
       return ok(paymentData('completed'));
     });
@@ -713,7 +783,10 @@ describe('payment client', () => {
       return apiError(503, 'service_unavailable');
     });
     await expect(
-      retryable.waitForCompletion(PAYMENT_ID, { timeoutMs: 5, pollIntervalMs: 2 }),
+      retryable.waitForCompletion(PAYMENT_ID, {
+        timeoutMs: 5,
+        pollIntervalMs: 2,
+      }),
     ).rejects.toBeInstanceOf(PaymentWaitTimeoutError);
     const callsAtTimeout = retryableCalls;
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -725,7 +798,10 @@ describe('payment client', () => {
       return apiError(409, 'conflict');
     });
     await expect(
-      deterministic.waitForCompletion(PAYMENT_ID, { timeoutMs: 100, pollIntervalMs: 1 }),
+      deterministic.waitForCompletion(PAYMENT_ID, {
+        timeoutMs: 100,
+        pollIntervalMs: 1,
+      }),
     ).rejects.toMatchObject({ code: 'conflict' });
     expect(deterministicCalls).toBe(1);
   });
@@ -733,7 +809,10 @@ describe('payment client', () => {
   it('stops on closed payments and on the caller wait limit', async () => {
     const closedClient = paymentClient(async () => ok(paymentData('closed')));
     await expect(
-      closedClient.waitForCompletion(PAYMENT_ID, { timeoutMs: 100, pollIntervalMs: 1 }),
+      closedClient.waitForCompletion(PAYMENT_ID, {
+        timeoutMs: 100,
+        pollIntervalMs: 1,
+      }),
     ).rejects.toBeInstanceOf(PaymentClosedError);
 
     const waitingClient = paymentClient(async () => ok(paymentData('processing')));

@@ -75,9 +75,7 @@ describe('llm client', () => {
   };
 
   it('maps a stable call id to the current turn_id wire field', async () => {
-    const { fetchImpl, calls } = captureFetch(
-      () => new Response('{"id":"chatcmpl-1"}', { status: 200 }),
-    );
+    const { fetchImpl, calls } = captureFetch(() => Response.json({ id: 'chatcmpl-1' }));
     const client = createLlmClient({ ...options, fetchImpl });
 
     const result = await client.chatCompletion({
@@ -104,7 +102,7 @@ describe('llm client', () => {
   });
 
   it('honours a caller-provided turn id', async () => {
-    const { fetchImpl, calls } = captureFetch(() => new Response('{}', { status: 200 }));
+    const { fetchImpl, calls } = captureFetch(() => Response.json({}));
     const client = createLlmClient({ ...options, fetchImpl });
 
     await client.chatCompletion({
@@ -116,7 +114,7 @@ describe('llm client', () => {
   });
 
   it('requires a stable call id and rejects disagreeing legacy aliases', async () => {
-    const { fetchImpl, calls } = captureFetch(() => new Response('{}', { status: 200 }));
+    const { fetchImpl, calls } = captureFetch(() => Response.json({}));
     const client = createLlmClient({ ...options, fetchImpl });
 
     await expect(
@@ -137,7 +135,7 @@ describe('llm client', () => {
   });
 
   it('rejects path segments and non-ASCII call identifiers before dispatch', async () => {
-    const { fetchImpl, calls } = captureFetch(() => new Response('{}', { status: 200 }));
+    const { fetchImpl, calls } = captureFetch(() => Response.json({}));
     const client = createLlmClient({ ...options, fetchImpl });
     for (const callId of [
       '.',
@@ -159,8 +157,8 @@ describe('llm client', () => {
   });
 
   it('throws LlmGatewayError with status and body on 402', async () => {
-    const { fetchImpl } = captureFetch(
-      () => new Response(JSON.stringify({ error: { code: 'payment_required' } }), { status: 402 }),
+    const { fetchImpl } = captureFetch(() =>
+      Response.json({ error: { code: 'payment_required' } }, { status: 402 }),
     );
     const client = createLlmClient({ ...options, fetchImpl });
 
@@ -208,7 +206,7 @@ describe('entitlement client', () => {
               availableBalance: 950,
             },
           }),
-          { status: 200 },
+          { status: 200, headers: { 'content-type': 'application/json' } },
         ),
     );
     const client = createEntitlementClient({
