@@ -7,10 +7,13 @@ const TEST_CREDENTIAL = `test-${'credential'.repeat(2)}`;
 
 const ENV = {
   COMBO_AGENT_ID: 'agent-a',
-  COMBO_PLATFORM_INTERNAL_TOKEN: TEST_CREDENTIAL,
+  COMBO_AUTHZ_URL: 'https://authz.example',
+  COMBO_AGENT_CREDENTIAL_ID: 'test-agent-credential',
+  COMBO_AGENT_CREDENTIAL_SECRET: 'test-secret-'.repeat(4),
+  COMBO_ALLOW_HTTP_FOR_TEST: 'true',
   COMBO_LLM_GATEWAY_URL: 'http://gateway:4103/',
-  COMBO_BILLING_URL: 'http://billing:4102',
   COMBO_JWKS_URL: 'http://authz:4101/.well-known/jwks.json',
+  COMBO_ASSERTION_ISSUER: 'combo-authz',
 };
 
 describe('loadAgentSdkConfig', () => {
@@ -18,7 +21,7 @@ describe('loadAgentSdkConfig', () => {
     const config = loadAgentSdkConfig(ENV);
     expect(config.agentId).toBe('agent-a');
     expect(config.llmGatewayUrl).toBe('http://gateway:4103');
-    expect(config.assertionIssuer).toBeUndefined();
+    expect(config.assertionIssuer).toBe('combo-authz');
   });
 
   it('reports every missing variable at once', () => {
@@ -26,10 +29,12 @@ describe('loadAgentSdkConfig', () => {
     expect(failure).toBeInstanceOf(AgentSdkConfigError);
     expect((failure as AgentSdkConfigError).missing).toEqual([
       'COMBO_AGENT_ID',
-      'COMBO_PLATFORM_INTERNAL_TOKEN',
+      'COMBO_AUTHZ_URL',
+      'COMBO_AGENT_CREDENTIAL_ID',
+      'COMBO_AGENT_CREDENTIAL_SECRET',
       'COMBO_LLM_GATEWAY_URL',
-      'COMBO_BILLING_URL',
       'COMBO_JWKS_URL',
+      'COMBO_ASSERTION_ISSUER',
     ]);
   });
 
@@ -38,8 +43,8 @@ describe('loadAgentSdkConfig', () => {
     expect(() => loadAgentSdkConfig({ ...ENV, COMBO_PLATFORM_INTERNAL_TOKEN: 'short' })).toThrow(
       /INTERNAL_TOKEN/,
     );
-    expect(() => loadAgentSdkConfig({ ...ENV, COMBO_BILLING_URL: 'billing:4102' })).toThrow(
-      /COMBO_BILLING_URL/,
+    expect(() => loadAgentSdkConfig({ ...ENV, COMBO_AUTHZ_URL: 'authz:4101' })).toThrow(
+      /COMBO_AUTHZ_URL/,
     );
   });
 });
@@ -68,6 +73,7 @@ function captureFetch(response: () => Response | Promise<Response>) {
 
 describe('llm client', () => {
   const options = {
+    allowLegacyForTest: true as const,
     gatewayUrl: 'http://gateway:4103',
     internalToken: TEST_CREDENTIAL,
     agentId: 'agent-a',

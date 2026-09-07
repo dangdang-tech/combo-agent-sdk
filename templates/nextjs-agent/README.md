@@ -3,7 +3,7 @@
 这是一个可以直接安装、构建和启动的 Next.js 示例。它展示业务与支付的边界：
 
 > 当前随 SDK `0.1.0` 源码提供，状态为 `UNRELEASED / PARTIAL`。它验证本地合同，不代表真实 Payment API、Sandbox 或跨仓链路已经上线。
-> 模板里的 `COMBO_PLATFORM_INTERNAL_TOKEN` 目前仍是受控验证环境的共享内部凭据，不是按 Agent 签发的正式身份。per-Agent、短期、限权凭据必须由 Combo 后端完成后才能外部使用。
+> 模板使用每 Agent 独立凭据换取短期模型访问令牌，不接受共享平台 token。运行环境仍须完成对应身份配置与代理 Cookie 隔离，模块测试不能替代这一步。
 
 - 业务保存 `operationId`、原始请求、稳定 `callId`、状态和结果。
 - SDK 识别标准 402，但不保存业务数据，也不自动恢复任务。
@@ -61,7 +61,9 @@ Host 只能把 `paymentToken` 交回 Combo，并使用当前登录用户解析�
 POST /api/operations/{operationId}/resume
 ```
 
-示例会复用原来的 `callId`。如果任务已经完成，会直接返回保存的结果。
+示例会复用原来的 operationId 和 callId，并把这次请求的新用户断言交给 Gateway 重新验证。断言只存在于本次调用，不写入业务存储。如果任务已经完成，会直接返回保存的结果。
+
+取 Agent 访问令牌失败时尚未调用模型，业务保留原状态与编号，可稍后重试；模型请求发出后结果不确定则保留 outcome_unknown，不自动再次调用。
 
 operationId 必须为 8–128 字符的规范 ASCII 编号。调用方不可以提交 callId、paymentToken、requestKey 或其他未声明字段。Host 在自己的业务上下文中保存 operationId，并用 `encodeURIComponent(operationId)` 构造恢复路径；三字段支付消息不携带业务编号。
 

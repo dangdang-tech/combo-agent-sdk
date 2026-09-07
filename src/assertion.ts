@@ -3,6 +3,8 @@
 // 断言只带身份，本模块只返回 user_id，不推断任何权益。
 import { createLocalJWKSet, decodeProtectedHeader, importJWK, jwtVerify } from 'jose';
 import type { JWK, KeyLike } from 'jose';
+import { readBoundedJsonResponse } from './http-response.js';
+import { trustedServiceUrl } from './agent-access.js';
 
 export const ASSERTION_HEADER = 'x-combo-assertion';
 
@@ -35,6 +37,7 @@ export interface JwksResolverOptions {
   /** 缓存毫秒数，与 authz JWKS 端点的 cache-control 对齐，默认五分钟。 */
   cacheTtlMs?: number;
   now?: () => number;
+  allowHttpForTest?: boolean;
 }
 
 export type KeyResolver = (kid: string) => Promise<KeyLike>;
@@ -44,6 +47,7 @@ export type KeyResolver = (kid: string) => Promise<KeyLike>;
  * 刷新后仍不存在才报 unknown_key。
  */
 export function createJwksResolver(options: JwksResolverOptions): KeyResolver {
+  const jwksUrl = trustedServiceUrl(options.jwksUrl, options.allowHttpForTest);
   // 缺省走调用时的全局 fetch（惰性查找），长生命周期进程里测试桩与运行时装配都生效。
   const fetchImpl =
     options.fetchImpl ?? ((input: string, init?: RequestInit) => globalThis.fetch(input, init));
@@ -57,19 +61,40 @@ export function createJwksResolver(options: JwksResolverOptions): KeyResolver {
   } | null = null;
 
   async function fetchKeySet() {
-    const response = await fetchImpl(options.jwksUrl);
-    if (!response.ok) {
-      throw new AssertionVerificationError('unknown_key', `jwks fetch failed: ${response.status}`);
+    let body: { keys?: JWK[] };
+    try {
+      const signal = AbortSignal.timeout(2000);
+      const response = await fetchImpl(jwksUrl, { redirect: 'error', credentials: 'omit', signal });
+      if (response.status !== 200) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new Error();
+      }
+      body = (await readBoundedJsonResponse(response, 64 * 1024, signal)) as { keys?: JWK[] };
+    } catch {
+      throw new AssertionVerificationError('unknown_key', 'signing keys unavailable');
     }
-    const body = (await response.json()) as { keys?: JWK[] };
-    if (!Array.isArray(body.keys)) {
+    if (!body || !Array.isArray(body.keys) || body.keys.length === 0 || body.keys.length > 32) {
       throw new AssertionVerificationError('unknown_key', 'jwks document is malformed');
     }
     // importJWK 逐个预校验，坏 key 直接让整份 JWKS 失效，避免半可用缓存。
     const kids = new Set<string>();
     for (const key of body.keys) {
-      if (!key.kid) throw new AssertionVerificationError('unknown_key', 'jwks key missing kid');
-      await importJWK(key, 'EdDSA');
+      if (
+        !key ||
+        typeof key.kid !== 'string' ||
+        !key.kid ||
+        key.kid.length > 128 ||
+        kids.has(key.kid) ||
+        key.kty !== 'OKP' ||
+        key.crv !== 'Ed25519' ||
+        'd' in key
+      )
+        throw new AssertionVerificationError('unknown_key', 'invalid public signing key');
+      try {
+        await importJWK(key, 'EdDSA');
+      } catch {
+        throw new AssertionVerificationError('unknown_key', 'invalid public signing key');
+      }
       kids.add(key.kid);
     }
     cache = { keySet: createLocalJWKSet({ keys: body.keys }), kids, fetchedAt: now() };
@@ -83,7 +108,7 @@ export function createJwksResolver(options: JwksResolverOptions): KeyResolver {
       // 未知 kid：可能是轮换，强制刷新再判一次。
       current = await fetchKeySet();
       if (!current.kids.has(kid)) {
-        throw new AssertionVerificationError('unknown_key', `unknown assertion key id ${kid}`);
+        throw new AssertionVerificationError('unknown_key', 'unknown assertion key');
       }
     }
     const resolved = await current.keySet({ kid, alg: 'EdDSA' });
@@ -118,7 +143,8 @@ export function extractAssertion(headers: unknown): string | undefined {
     for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
       if (name.toLowerCase() !== ASSERTION_HEADER) continue;
       if (typeof value === 'string') return value;
-      if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+      if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string')
+        return value[0];
     }
   }
   return undefined;
@@ -145,10 +171,7 @@ function mapJoseError(error: unknown): AssertionVerificationError {
       );
     }
     default:
-      return new AssertionVerificationError(
-        'invalid_claim',
-        `assertion verification failed: ${(error as Error).message}`,
-      );
+      return new AssertionVerificationError('invalid_claim', 'assertion verification failed');
   }
 }
 
@@ -161,26 +184,51 @@ export function createAssertionVerifier(options: AssertionVerifierOptions): Asse
     }
     let kid: string;
     try {
+      if (typeof token !== 'string' || token.length > 8192) throw new Error();
       const header = decodeProtectedHeader(token);
-      if (header.alg !== 'EdDSA' || !header.kid) throw new Error('bad header');
+      if (header.alg !== 'EdDSA' || !header.kid || header.kid.length > 128)
+        throw new Error('bad header');
       kid = header.kid;
     } catch {
       throw new AssertionVerificationError('malformed', 'assertion is not an EdDSA JWT with kid');
     }
 
-    const key = await resolver(kid);
+    let key: KeyLike;
+    try {
+      key = await resolver(kid);
+    } catch {
+      throw new AssertionVerificationError('unknown_key', 'signing key unavailable');
+    }
     let payload;
     try {
       const verified = await jwtVerify(token, key, {
         audience: options.agentId,
+        algorithms: ['EdDSA'],
+        requiredClaims: ['sub', 'iat', 'nbf', 'exp', 'jti'],
+        maxTokenAge: 900,
         ...(options.issuer ? { issuer: options.issuer } : {}),
       });
       payload = verified.payload;
     } catch (error) {
       throw mapJoseError(error);
     }
-    if (!payload.sub) {
-      throw new AssertionVerificationError('invalid_claim', 'assertion subject is missing');
+    if (
+      typeof payload.sub !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.sub) ||
+      payload.aud !== options.agentId ||
+      payload.token_use !== undefined ||
+      typeof payload.iat !== 'number' ||
+      !Number.isSafeInteger(payload.iat) ||
+      typeof payload.exp !== 'number' ||
+      !Number.isSafeInteger(payload.exp) ||
+      !Number.isSafeInteger(payload.nbf) ||
+      payload.exp <= payload.iat ||
+      payload.exp - payload.iat > 900 ||
+      typeof payload.jti !== 'string' ||
+      !payload.jti ||
+      payload.jti.length > 128
+    ) {
+      throw new AssertionVerificationError('invalid_claim', 'invalid user assertion claims');
     }
     return { userId: payload.sub, expiresAt: new Date((payload.exp ?? 0) * 1000) };
   }

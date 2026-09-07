@@ -1,19 +1,19 @@
 // SDK 配置：全部来自环境变量，启动时一次性解析校验，缺失即报错（契约检查的一部分）。
-// SDK 不硬编码任何地址与密钥；内部 token 由 Agent 部署环境注入。
+// SDK 不硬编码任何地址与密钥；每 Agent 凭据由部署环境注入。
+import { trustedServiceUrl } from './agent-access.js';
 
 export interface AgentSdkConfig {
   /** 本 Agent 的平台标识，断言验签强制 audience 等于它。 */
   agentId: string;
-  /** 平台内部 token：调模型网关与计费服务的 Bearer 凭据。 */
-  internalToken: string;
+  authzUrl: string;
+  credentialId: string;
+  credentialSecret: string;
+  allowHttpForTest: boolean;
   /** 模型网关地址（OpenAI 兼容子集）。 */
   llmGatewayUrl: string;
-  /** 计费服务地址（钱包读模型）。 */
-  billingUrl: string;
   /** authz 的 JWKS 端点。 */
   jwksUrl: string;
-  /** 配置后验签同时强制 issuer。 */
-  assertionIssuer?: string;
+  assertionIssuer: string;
 }
 
 export class AgentSdkConfigError extends Error {
@@ -30,16 +30,22 @@ const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 const REQUIRED_VARS = [
   'COMBO_AGENT_ID',
-  'COMBO_PLATFORM_INTERNAL_TOKEN',
+  'COMBO_AUTHZ_URL',
+  'COMBO_AGENT_CREDENTIAL_ID',
+  'COMBO_AGENT_CREDENTIAL_SECRET',
   'COMBO_LLM_GATEWAY_URL',
-  'COMBO_BILLING_URL',
   'COMBO_JWKS_URL',
+  'COMBO_ASSERTION_ISSUER',
 ] as const;
 
 type EnvLike = Record<string, string | undefined>;
 
 /** 从环境变量解析 SDK 配置；所有缺失项一次性报出，不把第一个错误留给启动后才发现。 */
 export function loadAgentSdkConfig(env: EnvLike = process.env): AgentSdkConfig {
+  if (env.COMBO_PLATFORM_INTERNAL_TOKEN)
+    throw new AgentSdkConfigError(
+      'remove COMBO_PLATFORM_INTERNAL_TOKEN; formal Agent config uses independent credentials',
+    );
   const missing = REQUIRED_VARS.filter((name) => !env[name]);
   if (missing.length > 0) {
     throw new AgentSdkConfigError(
@@ -52,24 +58,36 @@ export function loadAgentSdkConfig(env: EnvLike = process.env): AgentSdkConfig {
   if (!AGENT_ID_PATTERN.test(agentId)) {
     throw new AgentSdkConfigError('COMBO_AGENT_ID must match ^[a-z0-9][a-z0-9-]{0,62}$');
   }
-  const internalToken = env.COMBO_PLATFORM_INTERNAL_TOKEN!;
-  if (internalToken.length < 16) {
-    throw new AgentSdkConfigError('COMBO_PLATFORM_INTERNAL_TOKEN must be at least 16 characters');
-  }
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(env.COMBO_AGENT_CREDENTIAL_ID!))
+    throw new AgentSdkConfigError('COMBO_AGENT_CREDENTIAL_ID has invalid format');
+  if (!/^[A-Za-z0-9_-]{32,256}$/.test(env.COMBO_AGENT_CREDENTIAL_SECRET!))
+    throw new AgentSdkConfigError('COMBO_AGENT_CREDENTIAL_SECRET has invalid format');
+  const allowHttpForTest = env.COMBO_ALLOW_HTTP_FOR_TEST === 'true';
+  if (env.COMBO_ALLOW_HTTP_FOR_TEST && !['true', 'false'].includes(env.COMBO_ALLOW_HTTP_FOR_TEST))
+    throw new AgentSdkConfigError('COMBO_ALLOW_HTTP_FOR_TEST must be true or false');
+  if (allowHttpForTest && env.NODE_ENV === 'production')
+    throw new AgentSdkConfigError('HTTP test mode is not allowed in production');
 
   return {
     agentId,
-    internalToken,
-    llmGatewayUrl: stripTrailingSlash(env.COMBO_LLM_GATEWAY_URL!, 'COMBO_LLM_GATEWAY_URL'),
-    billingUrl: stripTrailingSlash(env.COMBO_BILLING_URL!, 'COMBO_BILLING_URL'),
-    jwksUrl: env.COMBO_JWKS_URL!,
-    ...(env.COMBO_ASSERTION_ISSUER ? { assertionIssuer: env.COMBO_ASSERTION_ISSUER } : {}),
+    credentialId: env.COMBO_AGENT_CREDENTIAL_ID!,
+    credentialSecret: env.COMBO_AGENT_CREDENTIAL_SECRET!,
+    authzUrl: serviceUrl(env.COMBO_AUTHZ_URL!, 'COMBO_AUTHZ_URL', allowHttpForTest),
+    llmGatewayUrl: serviceUrl(
+      env.COMBO_LLM_GATEWAY_URL!,
+      'COMBO_LLM_GATEWAY_URL',
+      allowHttpForTest,
+    ),
+    jwksUrl: serviceUrl(env.COMBO_JWKS_URL!, 'COMBO_JWKS_URL', allowHttpForTest),
+    assertionIssuer: env.COMBO_ASSERTION_ISSUER!,
+    allowHttpForTest,
   };
 }
 
-function stripTrailingSlash(value: string, name: string): string {
-  if (!/^https?:\/\//.test(value)) {
-    throw new AgentSdkConfigError(`${name} must be an http(s) URL`);
+function serviceUrl(value: string, name: string, allowHttpForTest: boolean): string {
+  try {
+    return trustedServiceUrl(value, allowHttpForTest);
+  } catch {
+    throw new AgentSdkConfigError(`${name} must use trusted HTTPS`);
   }
-  return value.replace(/\/+$/, '');
 }

@@ -1,6 +1,13 @@
 // Agent 运行时 SDK 的汇总导出。各能力的职责见对应模块文件头注释。
 export { AgentSdkConfigError, loadAgentSdkConfig, type AgentSdkConfig } from './config.js';
 export {
+  AgentAccessError,
+  createAgentAccessTokenProvider,
+  type AgentAccessErrorCode,
+  type AgentAccessOptions,
+  type AgentAccessTokenProvider,
+} from './agent-access.js';
+export {
   ASSERTION_HEADER,
   AssertionVerificationError,
   createAssertionVerifier,
@@ -15,6 +22,9 @@ export {
   createLlmClient,
   type ChatCompletionInput,
   type ChatCompletionInputBase,
+  type SignedChatCompletionInput,
+  type LegacyChatCompletionInput,
+  type LlmClientOptions,
   type ChatMessage,
   type LlmClient,
 } from './llm.js';

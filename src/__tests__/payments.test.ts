@@ -91,6 +91,7 @@ describe('typed payment required errors', () => {
     const client = createLlmClient({
       gatewayUrl: 'https://llm.combo.test',
       internalToken: AGENT_CREDENTIAL,
+      allowLegacyForTest: true,
       agentId: 'agent-a',
       defaultModel: 'test-model',
       fetchImpl: async () => Response.json(standard402, { status: 402 }),
@@ -120,6 +121,7 @@ describe('typed payment required errors', () => {
     const client = createLlmClient({
       gatewayUrl: 'https://llm.combo.test',
       internalToken: AGENT_CREDENTIAL,
+      allowLegacyForTest: true,
       agentId: 'agent-a',
       defaultModel: 'test-model',
       fetchImpl: async () => Response.json(standard402, { status: 402 }),
@@ -138,6 +140,7 @@ describe('typed payment required errors', () => {
     const client = createLlmClient({
       gatewayUrl: 'https://llm.combo.test',
       internalToken: AGENT_CREDENTIAL,
+      allowLegacyForTest: true,
       agentId: 'agent-a',
       defaultModel: 'test-model',
       fetchImpl: async () =>

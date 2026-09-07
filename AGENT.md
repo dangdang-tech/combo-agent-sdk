@@ -15,7 +15,7 @@
 
 缺少其中任何一项时，停止支付联调，不要自己猜接口或凭据。
 
-SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operationId`、`callId`、`requestKey` 分别属于业务请求、收费调用和 Host 支付创建；OpenAPI 的 operationId 仅是代码生成方法名。当前 LLM 接口只传 callId，不能把 operationId 或 paymentToken 放入模型参数。
+SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operationId`、`callId`、`requestKey` 分别属于业务请求、收费调用和 Host 支付创建；OpenAPI 的 operationId 仅是代码生成方法名。正式 LLM 接口要求 operationId、callId 和当前请求的 userAssertion，禁止裸 userId、agentId 或 paymentToken。
 
 ## 允许做的事
 
@@ -30,7 +30,7 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 
 ## 禁止做的事
 
-- 不把 PSP、商户密钥或共享内部 token 放进外部或生产 Agent；模板里的共享 token 只允许受控验证；
+- 不把 PSP、商户密钥或共享内部 token 放进 Agent；模板只使用每 Agent 独立凭据；
 - 不相信请求体自报的 `userId`、`agentId`、金额、网址或二维码；
 - 不记录 `paymentToken`，也不把完整错误对象写入日志；
 - 不让 SDK 保存原始业务请求或自动恢复业务；
@@ -43,7 +43,7 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 
 1. 实现耐久的 `OperationStore`，保存业务请求、稳定编号、状态和结果。
 2. 接入身份断言，拒绝裸身份字段。
-3. 使用稳定 `callId` 调收费能力。
+3. 使用每 Agent 令牌、当前用户断言及稳定 operationId、callId 调收费能力。
 4. 只把三字段 Host 消息作为 402 正文。
 5. Host 严格解析消息，再向 Combo 查询权威金额和收银台地址。
 6. 创建结果不确定时使用原 `requestKey` 查询或重试。

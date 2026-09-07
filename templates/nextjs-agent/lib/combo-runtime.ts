@@ -1,6 +1,7 @@
 import {
   createAssertionVerifier,
   createLlmClient,
+  createAgentAccessTokenProvider,
   loadAgentSdkConfig,
   type AssertionVerifier,
   type LlmClient,
@@ -21,12 +22,18 @@ export function getComboRuntime(): ComboRuntime {
     verifier: createAssertionVerifier({
       jwksUrl: config.jwksUrl,
       agentId: config.agentId,
-      ...(config.assertionIssuer ? { issuer: config.assertionIssuer } : {}),
+      issuer: config.assertionIssuer,
+      allowHttpForTest: config.allowHttpForTest,
     }),
     llm: createLlmClient({
       gatewayUrl: config.llmGatewayUrl,
-      internalToken: config.internalToken,
-      agentId: config.agentId,
+      accessTokenProvider: createAgentAccessTokenProvider({
+        authzUrl: config.authzUrl,
+        credentialId: config.credentialId,
+        secret: config.credentialSecret,
+        allowHttpForTest: config.allowHttpForTest,
+      }),
+      allowHttpForTest: config.allowHttpForTest,
       defaultModel: process.env.COMBO_LLM_MODEL ?? 'deepseek-chat',
     }),
   };

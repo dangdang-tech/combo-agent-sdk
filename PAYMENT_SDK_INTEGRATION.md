@@ -2,7 +2,7 @@
 
 Payment SDK 是 Combo 支付中台的无状态客户端，封装“余额不足后支付”。业务保存原请求和执行结果，Combo 保存支付订单、回调、钱包、资金预留和流水。
 
-当前状态为 `UNRELEASED / PARTIAL`。SDK 按 Combo 已合并协议开发，真实 Payment API、正式 Agent 身份和真实支付验收仍待平台实现。
+当前状态为 `UNRELEASED / PARTIAL`。SDK 按 Combo 锁定协议开发，已接入每 Agent 短期身份和当前用户断言。真实渠道、收银台与完整环境验收尚未完成。
 
 ## 固定协议版本
 
@@ -16,7 +16,9 @@ OpenAPI SHA-256：`345bf7f148e85afddd52329e6b76fdf695806ef24c122af8a8a411937e90b
 - `callId`：业务中的一次收费调用，由业务后端生成并保存；网络重试和支付后继续复用。
 - `requestKey`：Host 创建支付时的防重复编号，由 Host 在发送 POST 前保存。
 
-SDK 不自动生成这三个编号，也不读写业务存储。当前模型网关仍将 `callId` 映射到 `x_combo.turn_id`；旧 `turnId` 保留一个兼容周期，同时提供时必须相同。当前 Gateway 不接收业务 `operationId`，SDK 会拒绝把它或支付凭证当成模型参数转发。后续 Gateway 接入需要单独更新此约定。
+SDK 不自动生成这三个编号，也不读写业务存储。正式模型请求只在 `x_combo.operation_id` 和 `x_combo.call_id` 中传递两个业务编号；用户和 Agent 来自独立签名头。支付凭证不得混入模型参数。
+
+旧 turnId 仅在显式 `allowLegacyForTest: true` 的非 production 验证模式保留。它不是 operationId，不能用于正式支付接入。
 
 OpenAPI 路由里的 `operationId` 是代码生成方法名，与上述业务编号无关。
 
@@ -27,7 +29,8 @@ OpenAPI 路由里的 `operationId` 是代码生成方法名，与上述业务编
 ```ts
 try {
   const result = await llm.chatCompletion({
-    userId: verifiedAssertion.userId,
+    userAssertion: currentRequestAssertion,
+    operationId: savedOperationId,
     callId: savedCallId,
     messages: savedMessages,
   });
@@ -94,7 +97,28 @@ const payment = await payments.create({
 
 浏览器模式发送当前 `cb_v2_session` 会话，使用 `credentials: 'include'`，不发送 Authorization。平台仍须验证当前用户与支付凭证绑定关系。
 
-服务端模式使用 `auth: { kind: 'bearer', getAccessToken(signal) { ... } }`，每次请求重新取短期限权凭据，并使用 `credentials: 'omit'`。不得使用共享内部 token；正式限权凭据仍需 Combo 实现。
+当前 Combo 支付服务只实现 Cookie 模式，POST 还必须来自平台允许的 Origin。SDK 保留的 `auth: { kind: 'bearer', getAccessToken(signal) { ... } }` 扩展接口尚无对应平台实现。Agent 的模型访问令牌不能用于支付接口。
+
+## 模型调用使用两份独立身份
+
+```ts
+const accessTokenProvider = createAgentAccessTokenProvider({
+  authzUrl: config.authzUrl,
+  credentialId: config.credentialId,
+  secret: config.credentialSecret,
+});
+const llm = createLlmClient({
+  gatewayUrl: config.llmGatewayUrl,
+  accessTokenProvider,
+  defaultModel: 'your-platform-model',
+});
+```
+
+凭据交换只发送 Agent 自己的编号和随机密钥，不接受自报用户、Agent 或权限。Authz 返回五分钟模型访问令牌，SDK 提前三十秒更新；请求和正文读取最多等待两秒，拒绝重定向及畸形响应，不保留原始错误。
+
+每次模型调用另行传入当前请求的 `userAssertion`。业务须先验签，Gateway 也会重新核验；SDK 不保存该断言，不把它放入模型正文，也不转发 Cookie。支付后继续时必须取得新的用户断言，不能从业务存储取旧值。
+
+`AgentAccessError` 表示取 Agent 令牌时已失败，尚未发送模型请求，业务可以用原编号重试。发送模型请求后的错误仍可能结果不确定，不能据此换 callId 自动重试。Reference Agent 分别处理这两种情况。
 
 首版只有：
 
@@ -162,7 +186,7 @@ SDK 本地错误类别只由真实 HTTP 状态决定。服务端 userMessage、r
 
 ## 业务如何继续
 
-业务恢复入口必须验证当前用户的新身份，读取自己的原请求，复用原 callId。已完成时直接返回保存的结果；同一用户与 operationId 串行执行。
+业务恢复入口必须验证当前用户的新身份，读取自己的原请求，复用原 operationId 和 callId。已完成时直接返回保存的结果；同一用户与 operationId 串行执行。
 
 Reference Agent 在调用模型前保存 running 状态。遇到无法确认结果的错误时保存 outcome_unknown，重复恢复返回 409，避免再次调用模型。业务应单独处理这类不确定结果；支付 SDK 不提供原模型结果找回能力。
 
