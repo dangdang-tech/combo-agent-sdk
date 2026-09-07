@@ -14,6 +14,8 @@
 
 在 SDK 仓库根目录执行：
 
+模板使用 pnpm 的 `link:../..` 直接引用同一目录树中的 SDK，避免全新安装时引用尚未生成构建文件的副本。模板依赖安装须使用 pnpm；SDK 工件本身仍可以用 npm 安装到其他业务工程。
+
 ```bash
 pnpm install
 pnpm build
