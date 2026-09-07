@@ -12,18 +12,18 @@ resources:
   limit: { cpu: 500m, memory: 512Mi }
 
 # 环境变量只声明名字，值存平台 Secret，Git 不落真实值。
-# 当前 COMBO_PLATFORM_INTERNAL_TOKEN 仍是验证期共享内部凭据，只能用于受控环境，
-# 不能对外安全使用。目标 per-Agent、短期、限权凭据尚待 Combo 后端实现。
+# 每个 Agent 使用独立凭据；平台内部或渠道密钥不得注入 Agent。
 env:
   - COMBO_AGENT_ID
-  - COMBO_PLATFORM_INTERNAL_TOKEN
+  - COMBO_AUTHZ_URL
+  - COMBO_AGENT_CREDENTIAL_ID
+  - COMBO_AGENT_CREDENTIAL_SECRET
   - COMBO_LLM_GATEWAY_URL
-  - COMBO_BILLING_URL
   - COMBO_JWKS_URL
+  - COMBO_ASSERTION_ISSUER
 
-# 声明用到的平台能力，是切面注入点。本模板用到 llm、entitlement 与 payment；
+# 声明用到的平台能力。本模板用到 llm 与 payment；
 # storage 能力在 Agent 真正接入托管存储时再声明。
 capabilities:
   - llm
-  - entitlement
   - payment

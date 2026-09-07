@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LlmGatewayError, PaymentRequiredError } from 'combo-agent-sdk';
+import { AgentAccessError, LlmGatewayError, PaymentRequiredError } from 'combo-agent-sdk';
 import { MemoryOperationStore } from './operation-store';
 
 const mocks = vi.hoisted(() => ({
@@ -25,10 +25,10 @@ vi.mock('./operation-store', async (importOriginal) => {
 import { handleNewOperation, handleResumeOperation } from './operation-handler';
 const operationId = 'operation-1';
 const input = { operationId, messages: [{ role: 'user', content: 'hello' }] };
-const request = (body: unknown = input) =>
+const request = (body: unknown = input, assertion = 'fresh.user.signature') =>
   new Request('https://agent.test/api/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-combo-assertion': assertion },
     body: JSON.stringify(body),
   });
 
@@ -51,7 +51,11 @@ describe('business-owned operation recovery', () => {
     expect(mocks.llm).toHaveBeenCalledTimes(1);
     expect((await handleResumeOperation(request(), operationId)).status).toBe(200);
     expect(mocks.llm).toHaveBeenCalledTimes(1);
-    expect(mocks.llm.mock.calls[0]?.[0]).not.toHaveProperty('operationId');
+    expect(mocks.llm.mock.calls[0]?.[0]).toMatchObject({
+      operationId,
+      userAssertion: 'fresh.user.signature',
+    });
+    expect(mocks.llm.mock.calls[0]?.[0]).not.toHaveProperty('userId');
   });
 
   it('reuses the saved call ID after 402 and revalidates the current identity', async () => {
@@ -71,10 +75,23 @@ describe('business-owned operation recovery', () => {
     const payment = await handleNewOperation(request());
     expect(payment.status).toBe(402);
     expect(Object.keys(await payment.json())).toEqual(['version', 'type', 'paymentToken']);
-    const resumed = await handleResumeOperation(request(), operationId);
+    const resumed = await handleResumeOperation(request(input, 'new.user.signature'), operationId);
     expect(resumed.status).toBe(200);
     expect(mocks.llm.mock.calls[1]?.[0].callId).toBe(mocks.llm.mock.calls[0]?.[0].callId);
     expect(mocks.verify).toHaveBeenCalledTimes(2);
+    expect(mocks.llm.mock.calls[1]?.[0].userAssertion).toBe('new.user.signature');
+    expect(
+      await (mocks.store as MemoryOperationStore).get('user-1', operationId),
+    ).not.toHaveProperty('userAssertion');
+  });
+
+  it('keeps the same IDs retryable when obtaining Agent identity fails before dispatch', async () => {
+    mocks.llm
+      .mockRejectedValueOnce(new AgentAccessError('unavailable'))
+      .mockResolvedValueOnce({ answer: 'ok' });
+    expect((await handleNewOperation(request())).status).toBe(503);
+    expect((await handleResumeOperation(request(), operationId)).status).toBe(200);
+    expect(mocks.llm.mock.calls[1]?.[0].callId).toBe(mocks.llm.mock.calls[0]?.[0].callId);
   });
 
   it('rejects changed input and another user cannot resume this operation', async () => {

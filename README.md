@@ -2,7 +2,7 @@
 
 **Combo 平台 Agent 开发套件** — 运行时 SDK + 可启动的 Next.js 示例，让 Agent 接入平台身份、模型、钱包读模型和托管支付。
 
-> **交付状态：UNRELEASED / PARTIAL。** `0.1.0` 尚未发布。Combo 后端的每 Agent + 用户绑定身份、真实 Payment API、Sandbox 和 conformance 尚未完成；当前代码只能用于合同开发和本地桩验证，不能对外宣称安全可用，也不能据此关闭 Combo #308。
+> 交付状态：UNRELEASED / PARTIAL。`0.1.0` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，真实支付渠道、收银台、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
 ![ESM](https://img.shields.io/badge/ESM-only-f7df1e)
@@ -23,14 +23,15 @@ Reference Agent 固定使用 Next.js `16.3.4`。只有跨仓实现、Test Sandbo
 
 ## 能力一览
 
-| 模块          | 能力                                                                                                 | 对接的平台服务   |
-| ------------- | ---------------------------------------------------------------------------------------------------- | ---------------- |
-| `assertion`   | 验证 ForwardAuth 注入的 JWT 身份断言（JWKS 缓存 + kid 轮换，audience 强制等于本 Agent）              | authz            |
-| `llm`         | OpenAI 兼容模型网关客户端，自动注入 `x_combo` 计量扩展（user_id / agent_id / turn_id），支持流式透传 | llm-gateway      |
-| `entitlement` | 查询钱包读模型（余额与冻结），权益判定下沉到 Agent                                                   | billing          |
-| `payments`    | 标准 402、Host 安全交接、支付创建与状态查询；不保存业务数据                                          | billing 支付中台 |
+| 模块           | 能力                                                                                    | 对接的平台服务   |
+| -------------- | --------------------------------------------------------------------------------------- | ---------------- |
+| `assertion`    | 验证 ForwardAuth 注入的 JWT 身份断言（JWKS 缓存 + kid 轮换，audience 强制等于本 Agent） | authz            |
+| `agent-access` | 使用每 Agent 凭据换取五分钟访问令牌，仅在内存短暂缓存。                                 | authz            |
+| `llm`          | 使用 Agent 令牌与当前用户断言调用模型，传递业务的 operationId 和 callId，支持流式响应。 | llm-gateway      |
+| `entitlement`  | 保留历史验证栈的钱包查询；依赖内部凭据，不适用于外部 Agent。                            | billing          |
+| `payments`     | 标准 402、Host 安全交接、支付创建与状态查询；不保存业务数据                             | billing 支付中台 |
 
-SDK 不持有支付渠道密钥。Payment Client 支持 Host 当前浏览器会话，或平台另行签发的短期、限权 Bearer 凭据；它不会自动复用共享内部 token。
+SDK 不持有支付渠道密钥。Payment Client 使用 Host 当前浏览器会话；其 Bearer 适配接口留作扩展，当前 Combo 支付服务尚未支持该模式，不能拿 Agent 访问令牌代替用户会话。
 
 支付接入的完整合同见 [PAYMENT_SDK_INTEGRATION.md](PAYMENT_SDK_INTEGRATION.md)。
 
@@ -54,14 +55,17 @@ npm install /path/to/artifacts/combo-agent-sdk-0.1.0.tgz
 
 本地开发自行设置；平台上由 `agent.yaml` 声明名字、平台注入值。启动即校验，缺失一次性全报：
 
-| 环境变量                        | 说明                                                                           |
-| ------------------------------- | ------------------------------------------------------------------------------ |
-| `COMBO_AGENT_ID`                | 本 Agent 的平台标识，断言验签强制 aud 等于它                                   |
-| `COMBO_PLATFORM_INTERNAL_TOKEN` | 当前仅限受控验证的共享 LLM/钱包内部凭据；Payment Client 禁止使用，不能对外部署 |
-| `COMBO_LLM_GATEWAY_URL`         | 模型网关地址                                                                   |
-| `COMBO_BILLING_URL`             | 计费服务地址                                                                   |
-| `COMBO_JWKS_URL`                | authz 的 JWKS 端点                                                             |
-| `COMBO_ASSERTION_ISSUER`        | 可选；配置后验签同时强制 issuer                                                |
+| 环境变量                        | 说明                                                      |
+| ------------------------------- | --------------------------------------------------------- |
+| `COMBO_AGENT_ID`                | 本 Agent 的平台标识，断言验签强制 aud 等于它              |
+| `COMBO_AUTHZ_URL`               | 平台身份服务地址。                                        |
+| `COMBO_AGENT_CREDENTIAL_ID`     | 平台分配给当前 Agent 的独立凭据编号。                     |
+| `COMBO_AGENT_CREDENTIAL_SECRET` | 当前 Agent 服务端专用的随机凭据，只用于换取短期访问令牌。 |
+| `COMBO_LLM_GATEWAY_URL`         | 模型网关地址                                              |
+| `COMBO_JWKS_URL`                | authz 的 JWKS 端点                                        |
+| `COMBO_ASSERTION_ISSUER`        | 必填，受信身份签发方。                                    |
+
+默认所有地址必须使用 HTTPS。本地桩测试可显式设置 `COMBO_ALLOW_HTTP_FOR_TEST=true`，production 不允许此开关。正式配置拒绝 `COMBO_PLATFORM_INTERNAL_TOKEN`，也不再要求 Agent 配置 Billing 内部地址或钱包密钥。
 
 ### 3. 最小接入示例
 
@@ -79,7 +83,7 @@ export async function POST(request: Request): Promise<Response> {
 
 调用方只提供业务 operationId 和 messages。业务后端在创建记录时生成并保存 callId，不接收外部传入的收费调用编号；支付后继续会验证新身份并复用原 callId。模型响应丢失时保存 outcome_unknown，重复恢复不会再次调用模型。
 
-`PaymentRequiredError` 仍然继承 `LlmGatewayError`，旧的错误捕获不会立刻失效。新版调用必须显式提供稳定 `callId`；旧 `turnId` 只保留一个兼容周期，二者同时出现时必须相同。
+`PaymentRequiredError` 仍然继承 `LlmGatewayError`。正式模型调用必须提供 `operationId`、`callId` 和当前请求的 `userAssertion`，不能传 userId、agentId 或 turnId。原共享入口只在显式 `allowLegacyForTest: true` 且非 production 时可用，不是正式接入方式。
 
 ### 4. Host 打开 Combo 托管支付
 
@@ -124,6 +128,7 @@ const payment = await payments.create({
 ├── src/
 │   ├── config.ts       # 环境变量 → SDK 配置，缺失一次性报错
 │   ├── assertion.ts    # 断言验签：JWKS 缓存 + kid 轮换感知 + aud 强制
+│   ├── agent-access.ts # 每 Agent 凭据换取短期模型访问令牌
 │   ├── llm.ts          # 模型网关客户端：x_combo 注入、流式/非流式
 │   ├── entitlement.ts  # 钱包读模型（余额与冻结），SDK 不做缓存
 │   ├── payments.ts     # 无状态支付中台客户端与标准 402

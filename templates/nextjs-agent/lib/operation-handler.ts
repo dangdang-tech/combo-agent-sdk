@@ -1,7 +1,9 @@
 import {
   AssertionVerificationError,
+  AgentAccessError,
   PaymentRequiredError,
   createPaymentHostMessage,
+  extractAssertion,
   type ChatMessage,
 } from 'combo-agent-sdk';
 import { getComboRuntime } from './combo-runtime';
@@ -18,7 +20,7 @@ export async function handleNewOperation(request: Request): Promise<Response> {
   return operationStore.runExclusive(userId, body.operationId, async () => {
     try {
       const operation = await operationStore.getOrCreate({ userId, ...body });
-      return runOperation(operation);
+      return runOperation(operation, extractAssertion(request.headers)!);
     } catch (error) {
       if (error instanceof OperationConflictError) {
         return Response.json({ error: 'operation_conflict' }, { status: 409 });
@@ -41,11 +43,11 @@ export async function handleResumeOperation(
   return operationStore.runExclusive(userId, operationId, async () => {
     const operation = await operationStore.get(userId, operationId);
     if (!operation) return Response.json({ error: 'operation_not_found' }, { status: 404 });
-    return runOperation(operation);
+    return runOperation(operation, extractAssertion(request.headers)!);
   });
 }
 
-async function runOperation(operation: OperationRecord): Promise<Response> {
+async function runOperation(operation: OperationRecord, userAssertion: string): Promise<Response> {
   if (operation.status === 'running' || operation.status === 'outcome_unknown') {
     return Response.json({ error: 'operation_outcome_unknown' }, { status: 409 });
   }
@@ -61,7 +63,8 @@ async function runOperation(operation: OperationRecord): Promise<Response> {
   await operationStore.save({ ...operation, status: 'running' });
   try {
     const result = await getComboRuntime().llm.chatCompletion({
-      userId: operation.userId,
+      userAssertion,
+      operationId: operation.operationId,
       callId: operation.callId,
       messages: operation.messages,
     });
@@ -77,6 +80,11 @@ async function runOperation(operation: OperationRecord): Promise<Response> {
       result,
     });
   } catch (error) {
+    if (error instanceof AgentAccessError) {
+      // Token acquisition failed before model dispatch. Keep the original business state and IDs.
+      await operationStore.save(operation);
+      return Response.json({ error: 'agent_identity_unavailable' }, { status: 503 });
+    }
     if (error instanceof PaymentRequiredError) {
       await operationStore.save({
         ...operation,
