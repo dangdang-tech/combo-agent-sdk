@@ -70,6 +70,9 @@ jobs:
       - name: Build SDK
         run: npm run build
 
+      - name: Run consumer-installable offline conformance
+        run: npm run conformance
+
       - name: Run package preflight
         run: npm run prepack
 
@@ -99,6 +102,10 @@ jobs:
             'contracts/payment-v1.openapi.json',
             'contracts/payment-contract.lock.json',
             'scripts/verify-payment-contract.mjs',
+            'scripts/doctor.mjs',
+            'scripts/conformance.mjs',
+            'dist/doctor.js',
+            'dist/conformance.js',
             'templates/nextjs-agent/lib/host-payment.ts',
             'templates/nextjs-agent/.env.example',
             'templates/nextjs-agent/README.md',

@@ -37,7 +37,7 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 - 不在重试时生成新的 `callId` 或 `requestKey`；
 - 不把模板内存存储当作生产存储；
 - 不在模型调用结果不确定时自动重试；先保留 running/outcome_unknown 状态并由业务找回结果；
-- 不声称退款、订阅、分账、多币种、Sandbox、doctor 或 conformance 已实现。
+- 不声称退款、订阅、分账、多币种或真实 Sandbox 已实现；doctor 与离线 conformance 不等于真实支付验收。
 
 ## 接入顺序
 
@@ -59,8 +59,12 @@ pnpm test
 pnpm verify:contract -- --upstream
 pnpm build
 pnpm prepack
+pnpm conformance
+pnpm doctor
 pnpm --filter combo-reference-agent typecheck
 pnpm --filter combo-reference-agent build
 ```
 
 锁定 OpenAPI 的一致性检查已经可以在本仓运行；真实支付、Sandbox 和完整 Host 验证仍须等待 Combo 后端提供正式环境，不能用本地桩代替。
+
+默认自检不联网。只有拿到受限配置并明确要求在线检查时才加 `doctor -- --online`；它只检查 Agent 身份，不调用模型或创建支付。任何自检 PASS 都必须同时保留 scope 与 Host NOT_RUN 等边界。
