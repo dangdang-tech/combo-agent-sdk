@@ -1,6 +1,7 @@
 // payments：Combo 支付中台的无状态客户端。
 // 本模块不保存业务请求，不决定价格，不接触支付渠道，也不替业务恢复任务。
 import { LlmGatewayError } from './llm-error.js';
+import { JsonResponseBodyError, readBoundedJsonResponse } from './http-response.js';
 
 export const PAYMENT_HOST_MESSAGE_VERSION = 1 as const;
 export const PAYMENT_HOST_MESSAGE_TYPE = 'combo.payment_required' as const;
@@ -36,18 +37,44 @@ export interface OpenUrlPaymentAction {
   expiresAt: string;
 }
 
-export interface PaymentView {
+interface PaymentViewBase {
   paymentRequestId: string;
-  requestKey: string;
-  status: PaymentStatus;
   amount: Money;
   expiresAt: string;
   createdAt: string;
   updatedAt: string;
-  completedAt?: string;
-  /** 只有 waiting 状态可能携带，且必须来自 Combo 的受鉴权响应。 */
-  action?: OpenUrlPaymentAction;
 }
+
+export interface WaitingPaymentView extends PaymentViewBase {
+  status: 'waiting';
+  /** waiting 必须提供由 Combo 返回、仍然有效的收银台动作。 */
+  action: OpenUrlPaymentAction;
+  completedAt?: never;
+}
+
+export interface ProcessingPaymentView extends PaymentViewBase {
+  status: 'processing';
+  action?: never;
+  completedAt?: never;
+}
+
+export interface CompletedPaymentView extends PaymentViewBase {
+  status: 'completed';
+  action?: never;
+  completedAt: string;
+}
+
+export interface ClosedPaymentView extends PaymentViewBase {
+  status: 'closed';
+  action?: never;
+  completedAt?: never;
+}
+
+export type PaymentView =
+  | WaitingPaymentView
+  | ProcessingPaymentView
+  | CompletedPaymentView
+  | ClosedPaymentView;
 
 /**
  * 新版标准 402。它仍然是 LlmGatewayError，因此原有 catch 不会失效。
@@ -56,29 +83,24 @@ export class PaymentRequiredError extends LlmGatewayError {
   readonly code = 'payment_required' as const;
   readonly #requirement: PaymentRequirement;
   readonly #traceId: string;
+  readonly #userMessage: string;
 
   constructor(
     requirement: PaymentRequirement,
     traceId: string,
-    message = 'payment required',
+    userMessage = '请完成支付后继续。',
   ) {
     const safeRequirement = freezePaymentRequirement(parsePaymentRequirement(requirement));
-    const safeTraceId = parseMeta({ traceId }).traceId;
-    optionalSafeString(message, 'error.message', 1, 512);
-    const safeBody = Object.freeze({
-      error: Object.freeze({ code: 'payment_required' as const }),
-      data: Object.freeze({
-        paymentRequirement: Object.freeze({
-          id: safeRequirement.id,
-          expiresAt: safeRequirement.expiresAt,
-        }),
-      }),
-      meta: Object.freeze({ traceId: safeTraceId }),
+    const safeTraceId = parseTraceId(traceId, 'error.traceId');
+    parseSafeMessage(userMessage, 'error.userMessage');
+    super(402, null, 'payment required');
+    Object.defineProperty(this, 'name', {
+      value: 'PaymentRequiredError',
+      configurable: true,
     });
-    super(402, safeBody, 'payment required');
-    Object.defineProperty(this, 'name', { value: 'PaymentRequiredError', configurable: true });
     this.#requirement = safeRequirement;
     this.#traceId = safeTraceId;
+    this.#userMessage = userMessage;
   }
 
   get requirement(): PaymentRequirement {
@@ -87,6 +109,10 @@ export class PaymentRequiredError extends LlmGatewayError {
 
   get traceId(): string {
     return this.#traceId;
+  }
+
+  get userMessage(): string {
+    return this.#userMessage;
   }
 
   get paymentRequestId(): string {
@@ -105,7 +131,7 @@ export class PaymentRequiredError extends LlmGatewayError {
     return this.requirement.expiresAt;
   }
 
-  toJSON(): Record<string, unknown> {
+  override toJSON(): Record<string, unknown> {
     return {
       name: this.name,
       code: this.code,
@@ -167,47 +193,98 @@ export type PaymentApiErrorCode =
   | 'payment_closed'
   | 'api_error';
 
+export type PaymentErrorAction = 'retry' | 'change_input' | 'escalate' | 'wait' | 'none';
+
+interface PaymentApiErrorOptions {
+  status: number;
+  traceId?: string;
+  retriable?: boolean;
+  action?: PaymentErrorAction;
+  userMessage?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  /** Accepted only so callers can report a cause without retaining or serializing it. */
+  cause?: unknown;
+}
+
 export class PaymentApiError extends Error {
-  constructor(
-    readonly code: PaymentApiErrorCode,
-    message: string,
-    readonly options: {
-      status: number;
-      traceId?: string;
-      serverCode?: string;
-      retryable?: boolean;
-      retryAfterMs?: number;
-      cause?: unknown;
-    },
-  ) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause });
-    this.name = 'PaymentApiError';
+  readonly code!: PaymentApiErrorCode;
+  readonly #status: number;
+  readonly #traceId: string | undefined;
+  readonly #retriable: boolean | undefined;
+  readonly #action: PaymentErrorAction | undefined;
+  readonly #retryable: boolean;
+  readonly #retryAfterMs: number | undefined;
+  readonly #userMessage: string | undefined;
+
+  constructor(code: PaymentApiErrorCode, message: string, options: PaymentApiErrorOptions) {
+    super(message);
+    Object.defineProperties(this, {
+      name: { value: 'PaymentApiError', configurable: true, enumerable: false },
+      code: { value: code, enumerable: true },
+    });
+    this.#status = options.status;
+    this.#traceId = options.traceId;
+    this.#retriable = options.retriable;
+    this.#action = options.action;
+    this.#retryable = options.retryable ?? false;
+    this.#retryAfterMs = options.retryAfterMs;
+    this.#userMessage = options.userMessage;
+  }
+
+  get userMessage(): string | undefined {
+    return this.#userMessage;
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): Record<string, unknown> {
+    return this.toJSON();
   }
 
   get status(): number {
-    return this.options.status;
+    return this.#status;
   }
 
   get traceId(): string | undefined {
-    return this.options.traceId;
+    return this.#traceId;
   }
 
-  get serverCode(): string | undefined {
-    return this.options.serverCode;
+  /** Human-facing retry hint from Combo's public ErrorEnvelope. */
+  get retriable(): boolean | undefined {
+    return this.#retriable;
   }
 
+  get action(): PaymentErrorAction | undefined {
+    return this.#action;
+  }
+
+  /** SDK polling decision. It is derived from HTTP/network state, never from the error body. */
   get retryable(): boolean {
-    return this.options.retryable ?? false;
+    return this.#retryable;
   }
 
   get retryAfterMs(): number | undefined {
-    return this.options.retryAfterMs;
+    return this.#retryAfterMs;
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      code: this.code,
+      status: this.status,
+      message: this.message,
+      ...(this.traceId ? { traceId: this.traceId } : {}),
+      ...(this.retriable === undefined ? {} : { retriable: this.retriable }),
+      ...(this.action === undefined ? {} : { action: this.action }),
+      ...(this.retryAfterMs === undefined ? {} : { retryAfterMs: this.retryAfterMs }),
+    };
   }
 }
 
 class PaymentResponseError extends PaymentApiError {
+  readonly #failureKind: 'body_read' | 'body_format' | 'schema';
+
   constructor(
-    readonly failureKind: 'body_read' | 'body_format' | 'schema',
+    failureKind: 'body_read' | 'body_format' | 'schema',
     message: string,
     status: number,
     cause?: unknown,
@@ -217,27 +294,51 @@ class PaymentResponseError extends PaymentApiError {
       retryable: failureKind === 'body_read' || status === 429 || status >= 500,
       cause,
     });
-    this.name = 'PaymentResponseError';
+    Object.defineProperty(this, 'name', {
+      value: 'PaymentResponseError',
+      configurable: true,
+      enumerable: false,
+    });
+    this.#failureKind = failureKind;
+  }
+
+  get failureKind(): 'body_read' | 'body_format' | 'schema' {
+    return this.#failureKind;
   }
 }
+
+/** Created only after receiving and validating an actual HTTP error response. */
+class PaymentHttpError extends PaymentApiError {}
 
 /**
  * 创建请求在收到响应前中断。服务端可能已经创建支付，调用方必须用原 requestKey 找回，
  * 不能换一个编号再次创建。
  */
 export class PaymentResultUnknownError extends PaymentApiError {
-  constructor(
-    readonly requestKey: string,
-    readonly reason: PaymentResultUnknownReason,
-    cause?: unknown,
-    status = 0,
-  ) {
+  readonly #requestKey: string;
+  readonly #reason: PaymentResultUnknownReason;
+
+  constructor(requestKey: string, reason: PaymentResultUnknownReason, cause?: unknown, status = 0) {
     super(
       'result_unknown',
-      `payment creation result is unknown; recover with requestKey ${requestKey}`,
+      'payment creation result is unknown; recover with the original requestKey',
       { status, retryable: false, cause },
     );
-    this.name = 'PaymentResultUnknownError';
+    Object.defineProperty(this, 'name', {
+      value: 'PaymentResultUnknownError',
+      configurable: true,
+      enumerable: false,
+    });
+    this.#requestKey = requestKey;
+    this.#reason = reason;
+  }
+
+  get requestKey(): string {
+    return this.#requestKey;
+  }
+
+  get reason(): PaymentResultUnknownReason {
+    return this.#reason;
   }
 }
 
@@ -250,25 +351,50 @@ export type PaymentResultUnknownReason =
   | 'server_error';
 
 export class PaymentWaitTimeoutError extends PaymentApiError {
-  constructor(
-    readonly paymentRequestId: string,
-    readonly lastPayment?: PaymentView,
-  ) {
+  readonly #paymentRequestId: string;
+  readonly #lastPayment: PaymentView | undefined;
+
+  constructor(paymentRequestId: string, lastPayment?: PaymentView) {
     super('wait_timeout', `timed out waiting for payment ${paymentRequestId}`, {
       status: 0,
       retryable: true,
     });
-    this.name = 'PaymentWaitTimeoutError';
+    Object.defineProperty(this, 'name', {
+      value: 'PaymentWaitTimeoutError',
+      configurable: true,
+      enumerable: false,
+    });
+    this.#paymentRequestId = paymentRequestId;
+    this.#lastPayment = lastPayment;
+  }
+
+  get paymentRequestId(): string {
+    return this.#paymentRequestId;
+  }
+
+  get lastPayment(): PaymentView | undefined {
+    return this.#lastPayment;
   }
 }
 
 export class PaymentClosedError extends PaymentApiError {
-  constructor(readonly payment: PaymentView) {
+  readonly #payment: PaymentView;
+
+  constructor(payment: PaymentView) {
     super('payment_closed', `payment ${payment.paymentRequestId} is closed`, {
       status: 0,
       retryable: false,
     });
-    this.name = 'PaymentClosedError';
+    Object.defineProperty(this, 'name', {
+      value: 'PaymentClosedError',
+      configurable: true,
+      enumerable: false,
+    });
+    this.#payment = payment;
+  }
+
+  get payment(): PaymentView {
+    return this.#payment;
   }
 }
 
@@ -303,10 +429,7 @@ export interface PaymentClient {
     options?: PaymentRequestOptions,
   ): Promise<PaymentView | null>;
   /** completed 时返回；closed 时抛 PaymentClosedError；超时不会继续后台查询。 */
-  waitForCompletion(
-    paymentRequestId: string,
-    options: WaitForPaymentOptions,
-  ): Promise<PaymentView>;
+  waitForCompletion(paymentRequestId: string, options: WaitForPaymentOptions): Promise<PaymentView>;
 }
 
 interface FetchLike {
@@ -342,13 +465,17 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_WAIT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
-const FORBIDDEN_MESSAGE_CHAR_PATTERN = /[\p{Cc}\p{Cs}\p{Cf}\u2028\u2029]/u;
+const MAX_PAYMENT_RESPONSE_BODY_BYTES = 64 * 1_024;
+const PAYMENT_SAFE_MESSAGE_MAX_CODE_POINTS = 512;
+const PAYMENT_SAFE_MESSAGE_PATTERN = /^[^\p{Cc}\p{Cs}\p{Cf}\u2028\u2029]+$/u;
 const ASCII_IDENTIFIER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
 const PAYMENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 const VISIBLE_ASCII_PATTERN = /^[\x21-\x7e]+$/;
 const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
-const RFC3339_UTC_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/;
+const PAYMENT_ACTION_URL_PATTERN =
+  /^https?:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:\/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})*)*(?:\?(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*)?$/;
+const PAYMENT_TIMESTAMP_PATTERN =
+  /^((?!0000)\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,9}))?Z$/;
 
 export function createPaymentClient(options: PaymentClientOptions): PaymentClient {
   const paymentUrl = parseHttpUrl(options.paymentUrl, 'paymentUrl').replace(/\/+$/, '');
@@ -367,7 +494,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
     init: RequestInit,
     requestOptions: PaymentRequestOptions,
     createRequestKey?: string,
-  ): Promise<unknown> {
+  ): Promise<PaymentView> {
     if (requestOptions.signal?.aborted) {
       throw new PaymentApiError('aborted', 'payment request was aborted before it started', {
         status: 0,
@@ -403,7 +530,6 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
           if (timedOut || requestOptions.signal?.aborted) {
             throw requestNotDispatchedError(timedOut, requestOptions.signal, cause);
           }
-          if (cause instanceof PaymentApiError) throw cause;
           throw new PaymentApiError(
             'credential_error',
             'could not obtain a payment API credential',
@@ -418,15 +544,19 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
 
       let response: Response;
       try {
-        response = await fetchImpl(url, {
-          ...init,
-          headers: {
-            ...headersToRecord(init.headers),
-            ...(authorization ? { authorization } : {}),
-          },
-          credentials: auth.kind === 'browser-session' ? 'include' : 'omit',
-          signal: controller.signal,
-        });
+        response = await raceWithAbort(
+          fetchImpl(url, {
+            ...init,
+            headers: {
+              ...headersToRecord(init.headers),
+              ...(authorization ? { authorization } : {}),
+            },
+            credentials: auth.kind === 'browser-session' ? 'include' : 'omit',
+            redirect: 'error',
+            signal: controller.signal,
+          }),
+          controller.signal,
+        );
       } catch (cause) {
         const reason = timedOut
           ? 'request_timeout'
@@ -449,7 +579,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
 
       let payload: unknown;
       try {
-        payload = await raceWithAbort(readJson(response), controller.signal);
+        payload = await raceWithAbort(readJson(response, controller.signal), controller.signal);
       } catch (cause) {
         if (timedOut || requestOptions.signal?.aborted) {
           const reason = timedOut ? 'request_timeout' : 'aborted';
@@ -469,8 +599,16 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
       if (!response.ok) {
         throw parseApiError(response.status, payload, response.headers.get('retry-after'));
       }
+      if (response.status !== 200 && !(init.method === 'POST' && response.status === 201)) {
+        throw new PaymentResponseError(
+          'schema',
+          'payment API returned an unexpected success status',
+          response.status,
+        );
+      }
       return parseSuccessEnvelope(payload, response.status);
     } finally {
+      controller.abort();
       clearTimeout(timer);
       requestOptions.signal?.removeEventListener('abort', onAbort);
     }
@@ -489,7 +627,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
       },
       requestOptions,
     );
-    const payment = parsePaymentView(data);
+    const payment = data;
     if (payment.paymentRequestId !== id) {
       throw invalidResponse('payment response does not match the requested paymentRequestId');
     }
@@ -498,6 +636,8 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
 
   return {
     async create(input, requestOptions = {}) {
+      if (!isRecord(input)) throw invalidRequest('payment creation input must be an object');
+      requireExactInputKeys(input, 'payment creation input', ['paymentToken', 'requestKey']);
       const paymentToken = parseOpaqueToken(input.paymentToken, 'paymentToken');
       const requestKey = parseRequestKey(input.requestKey);
       try {
@@ -505,17 +645,16 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
           collectionUrl,
           {
             method: 'POST',
-            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            headers: {
+              accept: 'application/json',
+              'content-type': 'application/json',
+            },
             body: JSON.stringify({ paymentToken, requestKey }),
           },
           requestOptions,
           requestKey,
         );
-        const payment = parsePaymentView(data);
-        if (payment.requestKey !== requestKey) {
-          throw invalidResponse('payment response does not match the create requestKey');
-        }
-        return payment;
+        return data;
       } catch (error) {
         throw classifyCreateFailure(error, requestKey);
       }
@@ -530,28 +669,25 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
           `${collectionUrl}/by-request-key/${encodeURIComponent(key)}`,
           {
             method: 'GET',
-            headers: { accept: 'application/json', 'cache-control': 'no-store' },
+            headers: {
+              accept: 'application/json',
+              'cache-control': 'no-store',
+            },
           },
           requestOptions,
         );
-        const payment = parsePaymentView(data);
-        if (payment.requestKey !== key) {
-          throw invalidResponse('payment response does not match the requested requestKey');
-        }
-        return payment;
+        return data;
       } catch (error) {
-        if (error instanceof PaymentApiError && error.code === 'not_found') return null;
+        if (error instanceof PaymentHttpError && error.status === 404) {
+          return null;
+        }
         throw error;
       }
     },
 
     async waitForCompletion(paymentRequestId, waitOptions) {
       const id = parseIdentifier(paymentRequestId, 'paymentRequestId');
-      const waitTimeoutMs = parseDuration(
-        waitOptions.timeoutMs,
-        'timeoutMs',
-        MAX_WAIT_TIMEOUT_MS,
-      );
+      const waitTimeoutMs = parseDuration(waitOptions.timeoutMs, 'timeoutMs', MAX_WAIT_TIMEOUT_MS);
       const pollIntervalMs = parseDuration(
         waitOptions.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         'pollIntervalMs',
@@ -587,10 +723,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
             if (remainingAfterError <= 0) {
               throw new PaymentWaitTimeoutError(id, lastPayment);
             }
-            const retryDelay = Math.min(
-              error.retryAfterMs ?? pollIntervalMs,
-              remainingAfterError,
-            );
+            const retryDelay = Math.min(error.retryAfterMs ?? pollIntervalMs, remainingAfterError);
             await abortableSleep(retryDelay, waitOptions.signal);
             continue;
           }
@@ -610,12 +743,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
 function classifyCreateFailure(error: unknown, requestKey: string): unknown {
   if (error instanceof PaymentResultUnknownError) return error;
   if (error instanceof PaymentResponseError && error.failureKind === 'body_read') {
-    return new PaymentResultUnknownError(
-      requestKey,
-      'response_interrupted',
-      error,
-      error.status,
-    );
+    return new PaymentResultUnknownError(requestKey, 'response_interrupted', error, error.status);
   }
   if (error instanceof PaymentApiError) {
     if (error.status === 408) {
@@ -691,9 +819,7 @@ function parsePaymentAuth(
     requireExactInputKeys(value, 'bearer auth', ['kind', 'getAccessToken']);
     return {
       kind: 'bearer',
-      getAccessToken: value.getAccessToken as (
-        signal: AbortSignal,
-      ) => string | Promise<string>,
+      getAccessToken: value.getAccessToken as (signal: AbortSignal) => string | Promise<string>,
     };
   }
   throw new PaymentApiError('invalid_request', 'auth must select one supported mode', {
@@ -709,39 +835,27 @@ export function parsePaymentRequiredError(
 ): PaymentRequiredError | null {
   if (status !== 402 || !isRecord(body)) return null;
   try {
-    requireExactKeys(body, 'response', ['error', 'data', 'meta']);
+    requireExactKeys(body, 'response', ['error']);
     const error = requireRecord(body.error, 'error');
-    requireExactKeys(error, 'error', ['code'], ['message']);
-    if (parseResponseIdentifier(error.code, 'error.code', 1) !== 'payment_required') {
-      return null;
-    }
-    const data = requireRecord(body.data, 'data');
-    requireExactKeys(data, 'data', ['paymentRequirement']);
-    const requirement = parsePaymentRequirement(data.paymentRequirement);
-    const traceId = parseMeta(body.meta).traceId;
-    const message = optionalSafeString(error.message, 'error.message', 1, 512);
-    return new PaymentRequiredError(requirement, traceId, message ?? 'payment required');
+    requireExactKeys(error, 'error', ['userMessage', 'retriable', 'action', 'traceId', 'payment']);
+    if (error.retriable !== false || error.action !== 'wait') return null;
+    const userMessage = parseSafeMessage(error.userMessage, 'error.userMessage');
+    const requirement = parsePaymentRequirement(error.payment, 'error.payment');
+    const traceId = parseTraceId(error.traceId, 'error.traceId');
+    return new PaymentRequiredError(requirement, traceId, userMessage);
   } catch {
     return null;
   }
 }
 
-function parsePaymentRequirement(value: unknown): PaymentRequirement {
-  const object = requireRecord(value, 'data.paymentRequirement');
-  requireExactKeys(object, 'data.paymentRequirement', [
-    'id',
-    'paymentToken',
-    'amount',
-    'expiresAt',
-  ]);
+function parsePaymentRequirement(value: unknown, path = 'error.payment'): PaymentRequirement {
+  const object = requireRecord(value, path);
+  requireExactKeys(object, path, ['id', 'paymentToken', 'amount', 'expiresAt']);
   return {
-    id: parseResponseIdentifier(object.id, 'data.paymentRequirement.id', 1),
-    paymentToken: parseResponsePaymentToken(
-      object.paymentToken,
-      'data.paymentRequirement.paymentToken',
-    ),
-    amount: parseMoney(object.amount, 'data.paymentRequirement.amount'),
-    expiresAt: parseTimestamp(object.expiresAt, 'data.paymentRequirement.expiresAt'),
+    id: parseResponseIdentifier(object.id, `${path}.id`, 1),
+    paymentToken: parseResponsePaymentToken(object.paymentToken, `${path}.paymentToken`),
+    amount: parseMoney(object.amount, `${path}.amount`),
+    expiresAt: parseTimestamp(object.expiresAt, `${path}.expiresAt`),
   };
 }
 
@@ -762,40 +876,63 @@ function parsePaymentView(value: unknown): PaymentView {
   requireExactKeys(
     object,
     'data',
-    [
-      'paymentRequestId',
-      'requestKey',
-      'status',
-      'amount',
-      'expiresAt',
-      'createdAt',
-      'updatedAt',
-    ],
+    ['paymentRequestId', 'status', 'amount', 'expiresAt', 'createdAt', 'updatedAt'],
     ['completedAt', 'action'],
   );
   const status = parsePaymentStatus(object.status);
   const action = object.action === undefined ? undefined : parsePaymentAction(object.action);
-  if (action && status !== 'waiting') {
-    throw invalidResponse('data.action is only valid while status is waiting');
-  }
   const completedAt = optionalTimestamp(object.completedAt, 'data.completedAt');
+  const paymentRequestId = parseResponseIdentifier(
+    object.paymentRequestId,
+    'data.paymentRequestId',
+    1,
+  );
+  const amount = parseMoney(object.amount, 'data.amount');
+  const expiresAt = parseTimestamp(object.expiresAt, 'data.expiresAt');
+  const createdAt = parseTimestamp(object.createdAt, 'data.createdAt');
+  const updatedAt = parseTimestamp(object.updatedAt, 'data.updatedAt');
+
+  if (compareTimestamps(updatedAt, createdAt) < 0) {
+    throw invalidResponse('data.updatedAt cannot precede data.createdAt');
+  }
+  if (compareTimestamps(expiresAt, createdAt) <= 0) {
+    throw invalidResponse('data.expiresAt must follow data.createdAt');
+  }
   if (status === 'completed' && !completedAt) {
     throw invalidResponse('data.completedAt is required when status is completed');
   }
   if (status !== 'completed' && completedAt) {
     throw invalidResponse('data.completedAt is only valid when status is completed');
   }
-  return {
-    paymentRequestId: parseResponseIdentifier(object.paymentRequestId, 'data.paymentRequestId', 1),
-    requestKey: parseResponseIdentifier(object.requestKey, 'data.requestKey', 8),
-    status,
-    amount: parseMoney(object.amount, 'data.amount'),
-    expiresAt: parseTimestamp(object.expiresAt, 'data.expiresAt'),
-    createdAt: parseTimestamp(object.createdAt, 'data.createdAt'),
-    updatedAt: parseTimestamp(object.updatedAt, 'data.updatedAt'),
-    ...(completedAt ? { completedAt } : {}),
-    ...(action ? { action } : {}),
-  };
+  if (
+    completedAt &&
+    (compareTimestamps(completedAt, createdAt) < 0 || compareTimestamps(completedAt, updatedAt) > 0)
+  ) {
+    throw invalidResponse('data.completedAt must fall between data.createdAt and data.updatedAt');
+  }
+
+  const common = { paymentRequestId, amount, expiresAt, createdAt, updatedAt };
+  if (status === 'waiting') {
+    if (!action) throw invalidResponse('data.action is required while status is waiting');
+    if (compareTimestamps(expiresAt, updatedAt) <= 0) {
+      throw invalidResponse('data.expiresAt must follow data.updatedAt while status is waiting');
+    }
+    if (
+      compareTimestamps(action.expiresAt, updatedAt) <= 0 ||
+      compareTimestamps(action.expiresAt, expiresAt) > 0
+    ) {
+      throw invalidResponse(
+        'data.action.expiresAt must follow data.updatedAt and not exceed data.expiresAt',
+      );
+    }
+    return Object.freeze({ ...common, status, action });
+  }
+  if (action) throw invalidResponse('data.action is only valid while status is waiting');
+  if (status === 'completed') {
+    return Object.freeze({ ...common, status, completedAt: completedAt! });
+  }
+  if (status === 'processing') return Object.freeze({ ...common, status });
+  return Object.freeze({ ...common, status: 'closed' });
 }
 
 function parsePaymentAction(value: unknown): OpenUrlPaymentAction {
@@ -804,15 +941,20 @@ function parsePaymentAction(value: unknown): OpenUrlPaymentAction {
   if (object.kind !== 'open_url') {
     throw invalidResponse('data.action.kind must be open_url');
   }
-  return {
+  return Object.freeze({
     kind: 'open_url',
     url: parseResponseHttpUrl(object.url, 'data.action.url'),
     expiresAt: parseTimestamp(object.expiresAt, 'data.action.expiresAt'),
-  };
+  });
 }
 
 function parsePaymentStatus(value: unknown): PaymentStatus {
-  if (value === 'waiting' || value === 'processing' || value === 'completed' || value === 'closed') {
+  if (
+    value === 'waiting' ||
+    value === 'processing' ||
+    value === 'completed' ||
+    value === 'closed'
+  ) {
     return value;
   }
   throw invalidResponse('data.status is not a supported payment status');
@@ -822,19 +964,19 @@ function parseMoney(value: unknown, path: string): Money {
   const object = requireRecord(value, path);
   requireExactKeys(object, path, ['currency', 'amountCents']);
   if (object.currency !== 'CNY') throw invalidResponse(`${path}.currency must be CNY`);
-  const amountCents = requireString(object.amountCents, `${path}.amountCents`, 1, 32);
+  const amountCents = requireString(object.amountCents, `${path}.amountCents`, 1, 15);
   if (!POSITIVE_INTEGER_PATTERN.test(amountCents)) {
     throw invalidResponse(`${path}.amountCents must be a positive integer string`);
   }
-  return { currency: 'CNY', amountCents };
+  return Object.freeze({ currency: 'CNY', amountCents });
 }
 
-function parseSuccessEnvelope(value: unknown, status: number): unknown {
+function parseSuccessEnvelope(value: unknown, status: number): PaymentView {
   try {
     const envelope = requireRecord(value, 'response');
     requireExactKeys(envelope, 'response', ['data', 'meta']);
     parseMeta(envelope.meta);
-    return envelope.data;
+    return parsePaymentView(envelope.data);
   } catch (error) {
     if (error instanceof PaymentApiError) {
       throw new PaymentResponseError('schema', error.message, status, error);
@@ -850,25 +992,27 @@ function parseApiError(
 ): PaymentApiError {
   try {
     const envelope = requireRecord(value, 'response');
-    requireExactKeys(envelope, 'response', ['error', 'meta'], ['data']);
+    requireExactKeys(envelope, 'response', ['error']);
     const error = requireRecord(envelope.error, 'response.error');
-    requireExactKeys(error, 'response.error', ['code'], ['message']);
-    const serverCode = parseResponseIdentifier(error.code, 'response.error.code', 1);
-    const message =
-      optionalSafeString(error.message, 'response.error.message', 1, 512) ??
-      `payment API returned ${status}`;
-    const traceId = parseMeta(envelope.meta).traceId;
-    const code = mapServerErrorCode(status, serverCode);
-    const retryAfterMs = parseRetryAfter(retryAfterHeader, envelope.data);
-    return new PaymentApiError(code, message, {
+    requireExactKeys(error, 'response.error', ['userMessage', 'retriable', 'action', 'traceId']);
+    const message = parseSafeMessage(error.userMessage, 'response.error.userMessage');
+    if (typeof error.retriable !== 'boolean') {
+      throw invalidResponse('response.error.retriable must be a boolean');
+    }
+    const action = parsePaymentErrorAction(error.action, 'response.error.action');
+    const traceId = parseTraceId(error.traceId, 'response.error.traceId');
+    const code = mapHttpErrorCode(status);
+    const retryAfterMs = parseRetryAfter(retryAfterHeader);
+    return new PaymentHttpError(code, `payment API returned ${status}`, {
       status,
       traceId,
-      serverCode,
+      userMessage: message,
+      retriable: error.retriable,
+      action,
       retryable: status === 408 || status === 429 || status >= 500,
       ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     });
   } catch (error) {
-    if (error instanceof PaymentApiError && error.code !== 'invalid_response') return error;
     return new PaymentResponseError(
       'schema',
       'payment API returned a malformed error',
@@ -878,18 +1022,19 @@ function parseApiError(
   }
 }
 
-function mapServerErrorCode(status: number, serverCode: string): PaymentApiErrorCode {
-  if (serverCode === 'invalid_request' || status === 400 || status === 422) return 'invalid_request';
-  if (serverCode === 'unauthorized' || status === 401) return 'unauthorized';
-  if (serverCode === 'forbidden' || status === 403) return 'forbidden';
-  if (serverCode === 'not_found' || status === 404) return 'not_found';
-  if (serverCode === 'conflict' || status === 409) return 'conflict';
-  if (serverCode === 'rate_limited' || status === 429) return 'rate_limited';
-  if (serverCode === 'service_unavailable' || status >= 500) return 'service_unavailable';
+function mapHttpErrorCode(status: number): PaymentApiErrorCode {
+  if (status === 400 || status === 422) return 'invalid_request';
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 408) return 'request_timeout';
+  if (status === 409) return 'conflict';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500) return 'service_unavailable';
   return 'api_error';
 }
 
-function parseRetryAfter(header: string | null | undefined, data: unknown): number | undefined {
+function parseRetryAfter(header: string | null | undefined): number | undefined {
   if (header && /^\d+$/.test(header)) {
     const milliseconds = Number(header) * 1_000;
     if (Number.isSafeInteger(milliseconds) && milliseconds > 0) {
@@ -902,48 +1047,26 @@ function parseRetryAfter(header: string | null | undefined, data: unknown): numb
       return Math.min(timestamp - Date.now(), MAX_WAIT_TIMEOUT_MS);
     }
   }
-  if (isRecord(data) && Object.prototype.hasOwnProperty.call(data, 'retryAfterMs')) {
-    const value = data.retryAfterMs;
-    if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
-      return Math.min(value, MAX_WAIT_TIMEOUT_MS);
-    }
-  }
   return undefined;
 }
 
 function parseMeta(value: unknown): { traceId: string } {
   const object = requireRecord(value, 'meta');
   requireExactKeys(object, 'meta', ['traceId']);
-  return { traceId: parseResponseVisibleAscii(object.traceId, 'meta.traceId', 1, 256) };
+  return { traceId: parseTraceId(object.traceId, 'meta.traceId') };
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  let text: string;
+async function readJson(response: Response, signal?: AbortSignal): Promise<unknown> {
   try {
-    text = await response.text();
-  } catch (cause) {
+    return await readBoundedJsonResponse(response, MAX_PAYMENT_RESPONSE_BODY_BYTES, signal);
+  } catch (error) {
+    if (!(error instanceof JsonResponseBodyError)) throw error;
+    const failureKind = error.kind === 'body_read' ? 'body_read' : 'body_format';
     throw new PaymentResponseError(
-      'body_read',
-      'payment API response body could not be read',
+      failureKind,
+      `payment API returned an invalid response body (${error.kind})`,
       response.status,
-      cause,
-    );
-  }
-  if (!text) {
-    throw new PaymentResponseError(
-      'body_format',
-      'payment API returned an empty response',
-      response.status,
-    );
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (cause) {
-    throw new PaymentResponseError(
-      'body_format',
-      'payment API returned non-JSON data',
-      response.status,
-      cause,
+      error,
     );
   }
 }
@@ -1008,7 +1131,14 @@ function parseHttpUrl(value: unknown, path: string): string {
       retryable: false,
     });
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  if (
+    !/^https?:\/\//.test(text) ||
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
     throw new PaymentApiError('invalid_request', `${path} must be an http(s) URL`, {
       status: 0,
       retryable: false,
@@ -1018,21 +1148,45 @@ function parseHttpUrl(value: unknown, path: string): string {
 }
 
 function parseResponseHttpUrl(value: unknown, path: string): string {
-  const text = parseResponseVisibleAscii(value, path, 1, 4_096);
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > 4_096 ||
+    !PAYMENT_ACTION_URL_PATTERN.test(value)
+  ) {
+    throw invalidResponse(`${path} must be a canonical http(s) checkout URL`);
+  }
+  const text = value;
   try {
     const url = new URL(text);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported scheme');
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.hash !== ''
+    ) {
+      throw new Error('unsupported URL component');
+    }
   } catch {
-    throw invalidResponse(`${path} must be an http(s) URL`);
+    throw invalidResponse(`${path} must be a canonical http(s) checkout URL`);
   }
   return text;
 }
 
+type PaymentTimestampParts = readonly [number, number, number, number, number, number, number];
+
 function parseTimestamp(value: unknown, path: string): string {
   const text = requireString(value, path, 1, 64);
-  const match = RFC3339_UTC_PATTERN.exec(text);
+  if (!parseTimestampParts(text)) {
+    throw invalidResponse(`${path} must be a real UTC RFC 3339 timestamp`);
+  }
+  return text;
+}
+
+function parseTimestampParts(text: string): PaymentTimestampParts | null {
+  const match = PAYMENT_TIMESTAMP_PATTERN.exec(text);
   if (!match) {
-    throw invalidResponse(`${path} must be a UTC RFC 3339 timestamp`);
+    return null;
   }
   const year = Number(match[1]);
   const month = Number(match[2]);
@@ -1040,9 +1194,6 @@ function parseTimestamp(value: unknown, path: string): string {
   const hour = Number(match[4]);
   const minute = Number(match[5]);
   const second = Number(match[6]);
-  if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
-    throw invalidResponse(`${path} contains an invalid UTC date or time`);
-  }
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
   date.setUTCHours(hour, minute, second, 0);
@@ -1054,9 +1205,22 @@ function parseTimestamp(value: unknown, path: string): string {
     date.getUTCMinutes() !== minute ||
     date.getUTCSeconds() !== second
   ) {
-    throw invalidResponse(`${path} contains an invalid UTC date or time`);
+    return null;
   }
-  return text;
+  const nanoseconds = Number((match[7] ?? '').padEnd(9, '0'));
+  return [year, month, day, hour, minute, second, nanoseconds];
+}
+
+function compareTimestamps(left: string, right: string): -1 | 0 | 1 {
+  const leftParts = parseTimestampParts(left);
+  const rightParts = parseTimestampParts(right);
+  if (!leftParts || !rightParts) throw invalidResponse('payment timestamp comparison failed');
+  for (const [index, leftPart] of leftParts.entries()) {
+    const rightPart = rightParts[index]!;
+    if (leftPart < rightPart) return -1;
+    if (leftPart > rightPart) return 1;
+  }
+  return 0;
 }
 
 function optionalTimestamp(value: unknown, path: string): string | undefined {
@@ -1086,20 +1250,15 @@ function requireAsciiIdentifier(
     value.length > 128 ||
     !ASCII_IDENTIFIER_PATTERN.test(value)
   ) {
-    throw new PaymentApiError(
-      code,
-      `${path} must use the canonical ASCII identifier format`,
-      { status: 0, retryable: false },
-    );
+    throw new PaymentApiError(code, `${path} must use the canonical ASCII identifier format`, {
+      status: 0,
+      retryable: false,
+    });
   }
   return value;
 }
 
-function parseResponseIdentifier(
-  value: unknown,
-  path: string,
-  minimum: number,
-): string {
+function parseResponseIdentifier(value: unknown, path: string, minimum: number): string {
   if (
     typeof value !== 'string' ||
     value.length < minimum ||
@@ -1123,49 +1282,48 @@ function parseResponsePaymentToken(value: unknown, path: string): string {
   return value;
 }
 
-function parseResponseVisibleAscii(
-  value: unknown,
-  path: string,
-  minimum: number,
-  maximum: number,
-): string {
+function parseTraceId(value: unknown, path: string): string {
   if (
     typeof value !== 'string' ||
-    value.length < minimum ||
-    value.length > maximum ||
+    value.length < 1 ||
+    value.length > 256 ||
     !VISIBLE_ASCII_PATTERN.test(value)
   ) {
-    throw invalidResponse(`${path} must contain visible ASCII only`);
+    throw invalidResponse(`${path} must contain 1-256 visible ASCII characters`);
   }
   return value;
 }
 
-function requireString(
-  value: unknown,
-  path: string,
-  minimum: number,
-  maximum: number,
-): string {
+function parseSafeMessage(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !PAYMENT_SAFE_MESSAGE_PATTERN.test(value)) {
+    throw invalidResponse(`${path} contains unsafe characters`);
+  }
+  let codePoints = 0;
+  for (const _character of value) {
+    codePoints += 1;
+    if (codePoints > PAYMENT_SAFE_MESSAGE_MAX_CODE_POINTS) {
+      throw invalidResponse(`${path} exceeds 512 Unicode characters`);
+    }
+  }
+  return value;
+}
+
+function parsePaymentErrorAction(value: unknown, path: string): PaymentErrorAction {
+  if (
+    value === 'retry' ||
+    value === 'change_input' ||
+    value === 'escalate' ||
+    value === 'wait' ||
+    value === 'none'
+  ) {
+    return value;
+  }
+  throw invalidResponse(`${path} is not a supported action`);
+}
+
+function requireString(value: unknown, path: string, minimum: number, maximum: number): string {
   if (typeof value !== 'string' || value.length < minimum || value.length > maximum) {
     throw invalidResponse(`${path} must be a string with ${minimum}-${maximum} characters`);
-  }
-  return value;
-}
-
-function optionalSafeString(
-  value: unknown,
-  path: string,
-  minimum: number,
-  maximum: number,
-): string | undefined {
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== 'string' ||
-    value.length < minimum ||
-    value.length > maximum ||
-    FORBIDDEN_MESSAGE_CHAR_PATTERN.test(value)
-  ) {
-    throw invalidResponse(`${path} is malformed`);
   }
   return value;
 }
@@ -1217,11 +1375,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function invalidResponse(message: string): PaymentApiError {
-  return new PaymentApiError('invalid_response', message, { status: 0, retryable: false });
+  return new PaymentApiError('invalid_response', message, {
+    status: 0,
+    retryable: false,
+  });
 }
 
 function invalidRequest(message: string): PaymentApiError {
-  return new PaymentApiError('invalid_request', message, { status: 0, retryable: false });
+  return new PaymentApiError('invalid_request', message, {
+    status: 0,
+    retryable: false,
+  });
 }
 
 async function abortableSleep(delayMs: number, signal?: AbortSignal): Promise<void> {

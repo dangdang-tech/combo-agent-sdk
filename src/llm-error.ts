@@ -3,11 +3,15 @@ export class LlmGatewayError extends Error {
   readonly status!: number;
   readonly body!: unknown;
 
-  constructor(
-    status: number,
-    body: unknown,
-    message?: string,
-  ) {
+  toJSON(): Record<string, unknown> {
+    return { name: this.name, status: this.status, message: this.message };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): Record<string, unknown> {
+    return this.toJSON();
+  }
+
+  constructor(status: number, body: unknown, message?: string) {
     super(message ?? `llm gateway returned ${status}`);
     Object.defineProperties(this, {
       name: { value: 'LlmGatewayError', configurable: true, enumerable: false },
