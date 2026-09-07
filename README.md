@@ -13,20 +13,22 @@
 
 ## 兼容矩阵
 
-| SDK | Node.js | Payment API | 状态 |
-| --- | --- | --- | --- |
-| `0.1.0` 源码 | `>=20.9.0` | `/v1/payments` 合同草案 | UNRELEASED / PARTIAL |
+| SDK          | Node.js    | Payment API                        | 状态                 |
+| ------------ | ---------- | ---------------------------------- | -------------------- |
+| `0.1.0` 源码 | `>=20.9.0` | `/v1/payments`（Combo `84d75d8c`） | UNRELEASED / PARTIAL |
+
+支付协议随包附带于 `contracts/`，锁定来源与 SHA-256；`npm run verify:contract -- --upstream` 可以核对上游文件。
 
 Reference Agent 固定使用 Next.js `16.3.4`。只有跨仓实现、Test Sandbox 和 conformance 都通过后，Payment API 一栏才能改成可用版本。
 
 ## 能力一览
 
-| 模块 | 能力 | 对接的平台服务 |
-| --- | --- | --- |
-| `assertion` | 验证 ForwardAuth 注入的 JWT 身份断言（JWKS 缓存 + kid 轮换，audience 强制等于本 Agent） | authz |
-| `llm` | OpenAI 兼容模型网关客户端，自动注入 `x_combo` 计量扩展（user_id / agent_id / turn_id），支持流式透传 | llm-gateway |
-| `entitlement` | 查询钱包读模型（余额与冻结），权益判定下沉到 Agent | billing |
-| `payments` | 标准 402、Host 安全交接、支付创建与状态查询；不保存业务数据 | billing 支付中台 |
+| 模块          | 能力                                                                                                 | 对接的平台服务   |
+| ------------- | ---------------------------------------------------------------------------------------------------- | ---------------- |
+| `assertion`   | 验证 ForwardAuth 注入的 JWT 身份断言（JWKS 缓存 + kid 轮换，audience 强制等于本 Agent）              | authz            |
+| `llm`         | OpenAI 兼容模型网关客户端，自动注入 `x_combo` 计量扩展（user_id / agent_id / turn_id），支持流式透传 | llm-gateway      |
+| `entitlement` | 查询钱包读模型（余额与冻结），权益判定下沉到 Agent                                                   | billing          |
+| `payments`    | 标准 402、Host 安全交接、支付创建与状态查询；不保存业务数据                                          | billing 支付中台 |
 
 SDK 不持有支付渠道密钥。Payment Client 支持 Host 当前浏览器会话，或平台另行签发的短期、限权 Bearer 凭据；它不会自动复用共享内部 token。
 
@@ -52,63 +54,30 @@ npm install /path/to/artifacts/combo-agent-sdk-0.1.0.tgz
 
 本地开发自行设置；平台上由 `agent.yaml` 声明名字、平台注入值。启动即校验，缺失一次性全报：
 
-| 环境变量 | 说明 |
-| --- | --- |
-| `COMBO_AGENT_ID` | 本 Agent 的平台标识，断言验签强制 aud 等于它 |
+| 环境变量                        | 说明                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------ |
+| `COMBO_AGENT_ID`                | 本 Agent 的平台标识，断言验签强制 aud 等于它                                   |
 | `COMBO_PLATFORM_INTERNAL_TOKEN` | 当前仅限受控验证的共享 LLM/钱包内部凭据；Payment Client 禁止使用，不能对外部署 |
-| `COMBO_LLM_GATEWAY_URL` | 模型网关地址 |
-| `COMBO_BILLING_URL` | 计费服务地址 |
-| `COMBO_JWKS_URL` | authz 的 JWKS 端点 |
-| `COMBO_ASSERTION_ISSUER` | 可选；配置后验签同时强制 issuer |
+| `COMBO_LLM_GATEWAY_URL`         | 模型网关地址                                                                   |
+| `COMBO_BILLING_URL`             | 计费服务地址                                                                   |
+| `COMBO_JWKS_URL`                | authz 的 JWKS 端点                                                             |
+| `COMBO_ASSERTION_ISSUER`        | 可选；配置后验签同时强制 issuer                                                |
 
 ### 3. 最小接入示例
 
-下面是非流式业务调用的最小边界；完整恢复逻辑见 Reference Agent：
+Reference Agent 的入口直接使用已经包含存储和防重复处理的业务 handler：
 
 ```ts
-import {
-  AssertionVerificationError,
-  createAssertionVerifier,
-  PaymentRequiredError,
-  createLlmClient,
-  createPaymentHostMessage,
-  loadAgentSdkConfig,
-} from 'combo-agent-sdk';
+// templates/nextjs-agent/app/api/chat/route.ts
+import { handleNewOperation } from '../../../lib/operation-handler';
 
-const config = loadAgentSdkConfig();
-const verifier = createAssertionVerifier({ jwksUrl: config.jwksUrl, agentId: config.agentId });
-const llm = createLlmClient({
-  gatewayUrl: config.llmGatewayUrl,
-  internalToken: config.internalToken,
-  agentId: config.agentId,
-  defaultModel: 'deepseek-chat',
-});
-
+export const runtime = 'nodejs';
 export async function POST(request: Request): Promise<Response> {
-  let userId: string;
-  try {
-    ({ userId } = await verifier.verifyRequest(request)); // 验证 x-combo-assertion 头
-  } catch (error) {
-    if (error instanceof AssertionVerificationError) {
-      return Response.json({ error: error.code }, { status: 401 });
-    }
-    throw error;
-  }
-
-  const { callId, messages } = await request.json();
-  try {
-    // callId 由业务创建并保存；重试和支付后继续都必须复用。
-    const result = await llm.chatCompletion({ userId, callId, messages });
-    return Response.json(result);
-  } catch (error) {
-    if (error instanceof PaymentRequiredError) {
-      // 正文只有 version/type/paymentToken，不传金额、二维码或网址。
-      return Response.json(createPaymentHostMessage(error), { status: 402 });
-    }
-    throw error;
-  }
+  return handleNewOperation(request);
 }
 ```
+
+调用方只提供业务 operationId 和 messages。业务后端在创建记录时生成并保存 callId，不接收外部传入的收费调用编号；支付后继续会验证新身份并复用原 callId。模型响应丢失时保存 outcome_unknown，重复恢复不会再次调用模型。
 
 `PaymentRequiredError` 仍然继承 `LlmGatewayError`，旧的错误捕获不会立刻失效。新版调用必须显式提供稳定 `callId`；旧 `turnId` 只保留一个兼容周期，二者同时出现时必须相同。
 
@@ -144,6 +113,7 @@ const payment = await payments.create({
 - `app/api/chat/route.ts` — 开始业务请求。
 - `app/api/operations/[operationId]/resume/route.ts` — 使用当前用户的新断言继续原请求。
 - `lib/operation-store.ts` — 业务持久化接口；附带的内存实现只用于本地运行。
+- `lib/host-payment.ts` — Host 保存 requestKey、找回支付、打开收银台并使用新身份继续业务的示例。
 
 细节见 [templates/nextjs-agent/README.md](templates/nextjs-agent/README.md)。
 
@@ -171,7 +141,8 @@ const payment = await payments.create({
 pnpm install --frozen-lockfile
 pnpm typecheck      # 生产代码类型检查（tsc -b）
 pnpm typecheck:test # 测试代码类型检查
-pnpm test           # vitest，全部使用内存桩
+pnpm test           # 协议、安全和 Reference Agent 测试
+pnpm verify:contract -- --upstream # 核对锁定协议来源
 pnpm prepack        # 打包前构建（tsc -b 输出 dist/）
 ```
 

@@ -7,12 +7,15 @@
 开始前必须拿到：
 
 - 锁定的 SDK 版本或完整提交 SHA；
+- 工件中的 `contracts/payment-contract.lock.json` 与对应 OpenAPI；当前来源是 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；
 - Combo 提供的受限 Test 环境地址；
 - Agent 自己的身份和 LLM 配置；
 - 业务自己的耐久存储方案；
 - Host 已实现当前用户会话和 `combo.payment_required` 消息处理的确认。
 
 缺少其中任何一项时，停止支付联调，不要自己猜接口或凭据。
+
+SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operationId`、`callId`、`requestKey` 分别属于业务请求、收费调用和 Host 支付创建；OpenAPI 的 operationId 仅是代码生成方法名。当前 LLM 接口只传 callId，不能把 operationId 或 paymentToken 放入模型参数。
 
 ## 允许做的事
 
@@ -33,6 +36,7 @@
 - 不让 SDK 保存原始业务请求或自动恢复业务；
 - 不在重试时生成新的 `callId` 或 `requestKey`；
 - 不把模板内存存储当作生产存储；
+- 不在模型调用结果不确定时自动重试；先保留 running/outcome_unknown 状态并由业务找回结果；
 - 不声称退款、订阅、分账、多币种、Sandbox、doctor 或 conformance 已实现。
 
 ## 接入顺序
@@ -52,10 +56,11 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm typecheck:test
 pnpm test
+pnpm verify:contract -- --upstream
 pnpm build
 pnpm prepack
 pnpm --filter combo-reference-agent typecheck
 pnpm --filter combo-reference-agent build
 ```
 
-真实支付、Sandbox 和跨仓一致性验证必须等待 Combo 后端提供正式环境与证据，不能用本地桩代替。
+锁定 OpenAPI 的一致性检查已经可以在本仓运行；真实支付、Sandbox 和完整 Host 验证仍须等待 Combo 后端提供正式环境，不能用本地桩代替。

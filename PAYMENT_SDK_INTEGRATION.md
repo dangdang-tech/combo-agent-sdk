@@ -1,49 +1,28 @@
 # Combo 支付 SDK 接入说明
 
-这份文档只讲第一版能力：用户在调用收费能力时余额不足，进入 Combo 托管收银台，支付完成后由业务继续原请求。
+Payment SDK 是 Combo 支付中台的无状态客户端，封装“余额不足后支付”。业务保存原请求和执行结果，Combo 保存支付订单、回调、钱包、资金预留和流水。
 
-> 状态：`UNRELEASED / PARTIAL`。后端绑定身份、真实 Payment API、Sandbox 与 conformance 尚未交付。本说明是跨仓实现合同，不是外部可用声明，不能据此关闭 Combo #308。
+当前状态为 `UNRELEASED / PARTIAL`。SDK 按 Combo 已合并协议开发，真实 Payment API、正式 Agent 身份和真实支付验收仍待平台实现。
 
-## 一句话边界
+## 固定协议版本
 
-Payment SDK 是 Combo 支付中台的无状态客户端。
+协议来源为 Combo 提交 `84d75d8cc604fd70253bd0598006f92a0f4c9434`（PR #327），工件内附 [OpenAPI](contracts/payment-v1.openapi.json) 和 [锁文件](contracts/payment-contract.lock.json)。
 
-- 业务保存原请求、`operationId`、`callId`、状态和结果。
-- SDK 负责鉴权、接口调用、返回值检查、错误分类、防重复编号传递和有界查询。
-- Combo 保存价格、支付请求、订单、渠道回调、钱包和资金流水。
-- Host 使用当前登录用户打开 Combo 收银台。
+OpenAPI SHA-256：`345bf7f148e85afddd52329e6b76fdf695806ef24c122af8a8a411937e90b7e2`。本仓测试使用该文件与 SDK 解析同一批响应；CI 另行核对锁定的上游原文件。
 
-SDK 不保存业务数据，也不替业务继续任务。
+## 三个编号分别由谁保存
 
-## 完整流程
+- `operationId`：一次业务请求，由业务创建并保存。
+- `callId`：业务中的一次收费调用，由业务后端生成并保存；网络重试和支付后继续复用。
+- `requestKey`：Host 创建支付时的防重复编号，由 Host 在发送 POST 前保存。
 
-```text
-业务保存原请求、operationId 和 callId
-        ↓
-使用同一个 callId 调用收费能力
-        ↓
-余额不足，SDK 抛 PaymentRequiredError
-        ↓
-Agent 只向 Host 返回短期 paymentToken
-        ↓
-Host 使用当前登录用户向 Combo 解析 token
-        ↓
-Combo 展示金额并完成支付、回调和入账
-        ↓
-Host 使用当前用户的新身份通知业务继续
-        ↓
-业务读取原请求，复用原 callId，保存最终结果
-```
+SDK 不自动生成这三个编号，也不读写业务存储。当前模型网关仍将 `callId` 映射到 `x_combo.turn_id`；旧 `turnId` 保留一个兼容周期，同时提供时必须相同。当前 Gateway 不接收业务 `operationId`，SDK 会拒绝把它或支付凭证当成模型参数转发。后续 Gateway 接入需要单独更新此约定。
 
-## 三个编号
+OpenAPI 路由里的 `operationId` 是代码生成方法名，与上述业务编号无关。
 
-- `operationId`：一次业务请求。由业务创建并持久化。
-- `callId`：其中一次收费调用。重试必须复用。当前网关 wire 仍映射为 `x_combo.turn_id`。
-- `requestKey`：创建支付时的防重复编号。创建结果不确定时必须复用。
+## Agent 处理余额不足
 
-旧 `turnId` 作为 `callId` 的别名保留一个版本周期。两者同时传入时必须相同。新版 SDK 不再自动生成收费调用编号。
-
-## Agent：处理标准 402
+业务先保存原请求和稳定调用编号，再调用模型：
 
 ```ts
 try {
@@ -61,28 +40,30 @@ try {
 }
 ```
 
-标准 402 会被严格检查：
+SDK 只对真实 HTTP 402 和下面完整格式生成 `PaymentRequiredError`：
 
 ```json
 {
-  "error": { "code": "payment_required" },
-  "data": {
-    "paymentRequirement": {
+  "error": {
+    "userMessage": "余额不足，请完成支付后继续。",
+    "retriable": false,
+    "action": "wait",
+    "traceId": "trace_123",
+    "payment": {
       "id": "payreq_123",
       "paymentToken": "opaque_payment_token_123",
       "amount": { "currency": "CNY", "amountCents": "600" },
-      "expiresAt": "2026-09-03T10:05:00.000Z"
+      "expiresAt": "2026-09-03T10:05:00Z"
     }
-  },
-  "meta": { "traceId": "trace_123" }
+  }
 }
 ```
 
-金额使用整数分的字符串，不能用浮点数。`PaymentRequiredError` 继承 `LlmGatewayError`；不符合新格式的旧 402 仍保持为普通 `LlmGatewayError`。
+没有公共 `error.code`、`data` 或 `meta`。每层拒绝未知字段；不符合合同的 402 保持普通 `LlmGatewayError`，不能据此打开支付。SDK 错误的本地 `code` 仅供代码判别，不是服务器响应字段。
 
-标准 402 的每一层都只接受文档列出的字段。未知字段会使它保持为普通 402，不会升级成 `PaymentRequiredError`。类型化错误的默认 JSON 和日志不包含 `paymentToken`、金额或原始响应；仍然禁止记录完整错误或显式读取并记录 token。
+流式调用也在收到初始 HTTP 响应时识别同一 402；成功 SSE 开始后的断流不属于“需要支付”，不能自动重新调用模型。
 
-给 Host 的消息严格只有三个字段：
+Agent 给 Host 的消息严格只有三个字段：
 
 ```json
 {
@@ -92,139 +73,101 @@ try {
 }
 ```
 
-不能把 SDK 错误对象整体返回，也不能把金额、二维码、网址、支付方式或原始业务请求放进 Host 消息。
+Host 从自己的业务上下文读取 `operationId`，不能要求 Agent 在这条消息中附带金额、业务编号、用户标识、网址或二维码。
 
-## Host：创建并查看支付
+## Host 调用支付中台
 
-推荐 Host 使用当前登录用户的浏览器会话：
+Host 先调用 `parsePaymentHostMessage()`，再使用自己配置的支付服务地址与当前登录用户：
 
 ```ts
-const hostMessage = parsePaymentHostMessage(await agentResponse.json());
-const COMBO_PAYMENT_URL = hostConfig.paymentUrl; // Host 自己的显式配置，不来自 Agent
-
+const message = parsePaymentHostMessage(await agentResponse.json());
 const payments = createPaymentClient({
-  paymentUrl: COMBO_PAYMENT_URL,
+  paymentUrl: hostConfig.paymentUrl,
   auth: { kind: 'browser-session' },
 });
-```
-
-这个模式发送 `credentials: 'include'`，不发送 `Authorization`。服务端仍必须核对当前用户是不是 `paymentToken` 绑定的用户。
-
-如果以后提供服务端接入面，只能显式使用平台签发的短期、限权凭据：
-
-```ts
-const payments = createPaymentClient({
-  paymentUrl: COMBO_PAYMENT_URL,
-  auth: {
-    kind: 'bearer',
-    getAccessToken: (signal) => scopedCredentialProvider.getFreshToken({ signal }),
-  },
+await hostStore.saveRequestKey(operationId, requestKey);
+const payment = await payments.create({
+  paymentToken: message.paymentToken,
+  requestKey,
 });
 ```
 
-不要把 `COMBO_PLATFORM_INTERNAL_TOKEN` 或任何共享内部 token 交给 Payment Client。
-Bearer 模式明确发送 `credentials: 'omit'`，不会同时携带 Cookie；浏览器会话模式才发送 `credentials: 'include'`。
+浏览器模式发送当前 `cb_v2_session` 会话，使用 `credentials: 'include'`，不发送 Authorization。平台仍须验证当前用户与支付凭证绑定关系。
 
-客户端提供四个操作：
+服务端模式使用 `auth: { kind: 'bearer', getAccessToken(signal) { ... } }`，每次请求重新取短期限权凭据，并使用 `credentials: 'omit'`。不得使用共享内部 token；正式限权凭据仍需 Combo 实现。
 
-```ts
-const created = await payments.create({ paymentToken, requestKey });
-const current = await payments.get(created.paymentRequestId);
-const recovered = await payments.findByRequestKey(requestKey);
-const completed = await payments.waitForCompletion(created.paymentRequestId, {
-  timeoutMs: 5 * 60_000,
-  signal: request.signal,
-});
-```
+首版只有：
 
-Payment API 返回的 `PaymentView` 必须包含创建时的 `requestKey`：
+- `POST /v1/payments`：创建或重放支付。
+- `GET /v1/payments/:paymentRequestId`：查询状态。
+- `GET /v1/payments/by-request-key/:requestKey`：找回创建结果。
+
+查询发送 `Cache-Control: no-store`。所有支付请求拒绝 HTTP 重定向。支付响应必须为 `application/json`，读取上限 64 KiB，超时或超限即停止读取。
+
+## 支付状态与数据检查
+
+成功响应为 `{ data: PaymentView, meta: { traceId } }`。支付记录不回显 `requestKey`。同一支付凭证即使使用不同 `requestKey`，平台也必须返回同一个支付记录，不创建第二笔渠道订单。
 
 ```json
 {
   "paymentRequestId": "payreq_123",
-  "requestKey": "payment-create-123",
   "status": "waiting",
   "amount": { "currency": "CNY", "amountCents": "600" },
-  "expiresAt": "2026-09-03T10:05:00.000Z",
-  "createdAt": "2026-09-03T10:00:00.000Z",
-  "updatedAt": "2026-09-03T10:00:00.000Z",
+  "expiresAt": "2026-09-03T10:05:00Z",
+  "createdAt": "2026-09-03T10:00:00Z",
+  "updatedAt": "2026-09-03T10:00:00Z",
   "action": {
     "kind": "open_url",
-    "url": "https://pay.combo.example/...",
-    "expiresAt": "2026-09-03T10:05:00.000Z"
+    "url": "https://pay.combo.example/p/payreq_123",
+    "expiresAt": "2026-09-03T10:05:00Z"
   }
 }
 ```
 
-SDK 会核对 `get()` 返回的 `paymentRequestId`，以及 `create()`、`findByRequestKey()` 返回的 `requestKey`。错路由或错误缓存响应不会被接受。
-所有 GET 查询都显式发送 `Cache-Control: no-store`，不能用浏览器或中间缓存代替支付中台当前状态。
+- `waiting` 必须包含 Combo 返回的有效 `open_url`。
+- `processing` 表示正在确认支付或入账，不包含 action。
+- `completed` 表示 Combo 已确认到账并完成入账，必须有 completedAt，不包含 action。
+- `closed` 表示关闭或过期，不包含 action。
 
-对应接口为：
+SDK 按这四个状态提供可收窄的 TypeScript 联合类型。渠道页面显示成功不能替代 Combo 的 completed。
 
-- `POST /v1/payments`
-- `GET /v1/payments/:paymentRequestId`
-- `GET /v1/payments/by-request-key/:requestKey`
+金额为人民币正整数分字符串，范围 1 到 999999999999999。编号使用规范 ASCII。提示消息最多 512 个 Unicode 字符，允许合法 emoji，拒绝控制字符、隐藏格式字符和孤立代理码位。
 
-成功包络固定为 `{ data, meta: { traceId } }`，错误包络固定为 `{ error: { code }, data?, meta: { traceId } }`。包络、错误、状态、金额、动作和元信息均拒绝未知字段。编号只接受规范 ASCII，token 只接受至少 16 字符的 base64url 兼容字符；时间会逐字段校验真实 UTC 日期，不依赖日期自动纠正。
+收银台 URL 使用小写 HTTP(S) scheme 和 ASCII 主机名，不含用户信息或 fragment；完整规则以工件中的 OpenAPI 为准。时间为真实 UTC 日期，拒绝年份 0000 和闰秒；顺序以纳秒比较。更新不早于创建，完成时间在创建和更新之间；waiting 的支付和动作有效期都晚于更新时间，动作不晚于支付过期时间。
 
-## 支付状态
+## 错误和创建结果不确定
 
-- `waiting`：等待用户操作，可能包含 Combo 返回的 `open_url`。
-- `processing`：Combo 正在确认支付或入账。
-- `completed`：Combo 已确认到账并完成支付侧入账。
-- `closed`：支付已关闭或过期。
+普通错误严格为：
 
-渠道页面显示成功不等于 `completed`。业务只能把 Combo 返回的 `completed` 当作支付侧完成，但是否继续、怎样避免业务重复执行，仍由业务决定。
-
-`waitForCompletion()` 必须给出总超时，最多十五分钟；它不会在后台无限查询。查询遇到网络失败、单次超时、429 或 5xx 时，只在总时限内继续，并优先遵守服务端的 `Retry-After` / `retryAfterMs`。确定性错误立即停止。`closed` 会抛 `PaymentClosedError`，超过等待时间会抛 `PaymentWaitTimeoutError`。
-
-## 创建结果不确定
-
-如果创建支付时网络断开、超时，或已经收到但无法确认权威结果，服务端可能已经成功创建。SDK 会抛：
-
-```ts
-PaymentResultUnknownError {
-  requestKey: string;
-  reason:
-    | 'request_timeout'
-    | 'network_error'
-    | 'aborted'
-    | 'response_interrupted'
-    | 'invalid_response'
-    | 'server_error';
+```json
+{
+  "error": {
+    "userMessage": "服务暂时不可用，请稍后重试。",
+    "retriable": true,
+    "action": "retry",
+    "traceId": "trace_123"
+  }
 }
 ```
 
-这包括响应正文读取中断、空或非 JSON 的成功响应、畸形 2xx、HTTP 408，以及格式正确或错误的 5xx。确定性的其他 4xx 仍返回 `PaymentApiError`。如果调用在发送 HTTP 前取消或获取凭据超时，不会标为结果不确定，也不会继续发送 POST。
+SDK 本地错误类别只由真实 HTTP 状态决定。服务端 userMessage、retriable 和 action 可供界面使用，不能改变 SDK 的重试决定。`findByRequestKey()` 只有在收到格式正确的 HTTP 404 时返回 null；畸形 404 或其他状态都抛错。
 
-处理方式只有两种：
+`waitForCompletion()` 必须提供总时限，最多十五分钟。它只在时限内重试网络失败、单次超时、429 和 5xx，等待时间只读取 `Retry-After` 响应头。closed 抛 `PaymentClosedError`，等待超时抛 `PaymentWaitTimeoutError`，结束后不继续后台查询。
 
-1. 使用原 `requestKey` 调 `findByRequestKey()`；
-2. 使用原 `requestKey` 重试创建。
+创建时超时、连接中断、正文中断、空或畸形 2xx、HTTP 408、5xx，都可能发生“服务端成功但调用方没收到结果”。SDK 抛 `PaymentResultUnknownError`，其中可显式读取原 requestKey 和 reason。
 
-不能生成新 `requestKey`，否则可能出现第二笔支付。
+此时只能用原 requestKey 查询或重试。获取凭据时超时或发送前取消，不会标成创建结果不确定。
 
-## 业务恢复
+错误默认 JSON 和日志不展开支付对象、收银台地址、业务编号或原始异常；服务端 userMessage 通过显式属性读取。业务日志仅保留所需的状态、paymentRequestId 和 traceId。显式读取 paymentToken、lastPayment 或 body 后自行写日志仍可能泄露数据。
 
-Payment SDK 没有 `resumeOriginalRequest()`。业务应实现自己的恢复入口：
+## 业务如何继续
 
-1. Host 带当前用户的新身份调用恢复入口。
-2. 业务根据 `operationId` 读取原请求。
-3. 已完成时直接返回保存结果。
-4. 未完成时复用原 `callId` 调用收费能力。
-5. 同一个用户和 `operationId` 必须串行执行。
+业务恢复入口必须验证当前用户的新身份，读取自己的原请求，复用原 callId。已完成时直接返回保存的结果；同一用户与 operationId 串行执行。
 
-不要保存第一次请求的短期用户凭据。不要相信请求体里的裸 `userId` 或 `agentId`。
+Reference Agent 在调用模型前保存 running 状态。遇到无法确认结果的错误时保存 outcome_unknown，重复恢复返回 409，避免再次调用模型。业务应单独处理这类不确定结果；支付 SDK 不提供原模型结果找回能力。
 
-可运行示例见 [templates/nextjs-agent](templates/nextjs-agent/README.md)。示例的 `OperationStore` 明确属于业务；附带内存实现只用于本地验证，生产必须替换为耐久存储和跨实例锁。
+[Reference Agent](templates/nextjs-agent/README.md) 包含 Agent 路由、业务存储接口和 Host 支付协调示例。附带的业务内存存储会在重启后丢失；正式业务必须提供耐久存储与跨实例锁，Host 也必须实现自己的支付尝试存储。
 
-## 第一版不做
+## 本期不包含
 
-- 主动充值；
-- 退款；
-- 订阅；
-- 分账；
-- 税务和发票；
-- 多币种；
-- Agent 直连支付渠道；
-- SDK 保存或恢复业务请求。
+主动充值、退款、订阅、分账、税务、多币种、Agent 直连渠道、SDK 持久化或自动恢复业务。完整真实支付验收仍以 Combo #308 的平台验收为准。
