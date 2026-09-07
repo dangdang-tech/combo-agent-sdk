@@ -10,6 +10,7 @@ import {
 
 const AGENT = 'agent-a';
 const ISSUER = 'combo-authz';
+const USER_ID = 'ad89f2f5-09e2-4a6d-920b-d7902f97cd96';
 
 interface KeyPair {
   kid: string;
@@ -30,10 +31,12 @@ async function sign(
   const now = Math.floor(Date.now() / 1000);
   return new SignJWT({})
     .setProtectedHeader({ alg: 'EdDSA', typ: 'JWT', kid: key.kid })
-    .setSubject(claims.sub ?? 'user-1')
+    .setSubject(claims.sub ?? USER_ID)
     .setAudience(claims.aud ?? AGENT)
     .setIssuer(claims.iss ?? ISSUER)
     .setIssuedAt(now)
+    .setNotBefore(now - 2)
+    .setJti('test-assertion-id')
     .setExpirationTime(now + (claims.expOffsetSeconds ?? 300))
     .sign(key.privateKey);
 }
@@ -69,7 +72,7 @@ describe('assertion verification', () => {
     });
 
     const verified = await verifier.verify(await sign(key));
-    expect(verified.userId).toBe('user-1');
+    expect(verified.userId).toBe(USER_ID);
     expect(state.fetchCount).toBe(1);
 
     // 第二次命中缓存，不再抓 JWKS。
@@ -113,6 +116,37 @@ describe('assertion verification', () => {
     await expectCode(verifier.verify(undefined), 'missing');
     await expectCode(verifier.verify('not-a-jwt'), 'malformed');
     await expectCode(verifier.verify(await sign(key, { iss: 'someone-else' })), 'invalid_claim');
+    await expectCode(verifier.verify(await sign(key, { sub: 'agent-a' })), 'invalid_claim');
+    await expectCode(verifier.verify(await sign(key, { expOffsetSeconds: 3600 })), 'invalid_claim');
+    const now = Math.floor(Date.now() / 1000);
+    for (const payload of [
+      { sub: USER_ID, aud: AGENT, iss: ISSUER },
+      { sub: USER_ID, aud: AGENT, iss: ISSUER, iat: now, exp: now + 300 },
+      {
+        sub: USER_ID,
+        aud: AGENT,
+        iss: ISSUER,
+        iat: now,
+        nbf: now,
+        exp: now + 300,
+        jti: 'id',
+        token_use: 'agent_access',
+      },
+      {
+        sub: USER_ID,
+        aud: [AGENT, 'agent-b'],
+        iss: ISSUER,
+        iat: now,
+        nbf: now,
+        exp: now + 300,
+        jti: 'id',
+      },
+    ]) {
+      const unsafe = await new SignJWT(payload)
+        .setProtectedHeader({ alg: 'EdDSA', kid: key.kid })
+        .sign(key.privateKey);
+      await expectCode(verifier.verify(unsafe), 'invalid_claim');
+    }
   });
 
   it('refreshes the JWKS once on an unknown kid and verifies after rotation', async () => {
@@ -131,7 +165,7 @@ describe('assertion verification', () => {
     // 轮换：JWKS 只含新 key；未知 kid 触发一次强制刷新后验签通过。
     state.keys = [newKey];
     const verified = await verifier.verify(await sign(newKey));
-    expect(verified.userId).toBe('user-1');
+    expect(verified.userId).toBe(USER_ID);
     expect(state.fetchCount).toBe(fetchesBefore + 1);
   });
 
@@ -148,12 +182,12 @@ describe('assertion verification', () => {
     const viaHeaders = await verifier.verifyRequest({
       headers: new Headers({ 'x-combo-assertion': token }),
     });
-    expect(viaHeaders.userId).toBe('user-1');
+    expect(viaHeaders.userId).toBe(USER_ID);
 
     const viaRecord = await verifier.verifyRequest({
       headers: { 'X-Combo-Assertion': token },
     });
-    expect(viaRecord.userId).toBe('user-1');
+    expect(viaRecord.userId).toBe(USER_ID);
 
     expect(extractAssertion({ 'content-type': 'application/json' })).toBeUndefined();
     expect(extractAssertion(undefined)).toBeUndefined();

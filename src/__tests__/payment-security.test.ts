@@ -22,6 +22,7 @@ const requiredInput = {
   messages: [{ role: 'user', content: 'hi' }],
 };
 const llmOptions = {
+  allowLegacyForTest: true as const,
   gatewayUrl: 'https://gateway.combo.test',
   internalToken: credential,
   agentId: 'agent-a',
