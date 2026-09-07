@@ -1,18 +1,13 @@
 import {
   AssertionVerificationError,
-  LlmGatewayError,
   PaymentRequiredError,
   createPaymentHostMessage,
   type ChatMessage,
 } from 'combo-agent-sdk';
 import { getComboRuntime } from './combo-runtime';
-import {
-  OperationConflictError,
-  operationStore,
-  type OperationRecord,
-} from './operation-store';
+import { OperationConflictError, operationStore, type OperationRecord } from './operation-store';
 
-const CONTROL_FREE_PATTERN = /^[^\u0000-\u001f\u007f]+$/u;
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{6,126}[A-Za-z0-9])$/;
 
 export async function handleNewOperation(request: Request): Promise<Response> {
   const userId = await verifyUser(request);
@@ -51,6 +46,9 @@ export async function handleResumeOperation(
 }
 
 async function runOperation(operation: OperationRecord): Promise<Response> {
+  if (operation.status === 'running' || operation.status === 'outcome_unknown') {
+    return Response.json({ error: 'operation_outcome_unknown' }, { status: 409 });
+  }
   if (operation.status === 'completed') {
     return Response.json({
       operationId: operation.operationId,
@@ -59,6 +57,8 @@ async function runOperation(operation: OperationRecord): Promise<Response> {
     });
   }
 
+  // Save the dispatch intent first. A crash or lost response must not trigger another model call.
+  await operationStore.save({ ...operation, status: 'running' });
   try {
     const result = await getComboRuntime().llm.chatCompletion({
       userId: operation.userId,
@@ -71,7 +71,11 @@ async function runOperation(operation: OperationRecord): Promise<Response> {
       result,
       paymentRequestId: undefined,
     });
-    return Response.json({ operationId: operation.operationId, status: 'completed', result });
+    return Response.json({
+      operationId: operation.operationId,
+      status: 'completed',
+      result,
+    });
   } catch (error) {
     if (error instanceof PaymentRequiredError) {
       await operationStore.save({
@@ -82,10 +86,8 @@ async function runOperation(operation: OperationRecord): Promise<Response> {
       // 402 正文严格只有 version/type/paymentToken。金额与收银台地址由 Host 向 Combo 重查。
       return Response.json(createPaymentHostMessage(error), { status: 402 });
     }
-    if (error instanceof LlmGatewayError) {
-      return Response.json({ error: 'llm_gateway_error' }, { status: 502 });
-    }
-    throw error;
+    await operationStore.save({ ...operation, status: 'outcome_unknown' });
+    return Response.json({ error: 'operation_outcome_unknown' }, { status: 502 });
   }
 }
 
@@ -104,13 +106,17 @@ async function verifyUser(request: Request): Promise<string | Response> {
 async function parseInput(
   request: Request,
 ): Promise<{ operationId: string; messages: ChatMessage[] } | Response> {
-  const value = await request.json().catch(() => null);
+  const value = await readOperationInput(request);
   if (!isRecord(value)) return Response.json({ error: 'invalid_request' }, { status: 400 });
   // 身份只取签名断言。即使值碰巧正确，也拒绝业务请求自报身份。
   if ('userId' in value || 'agentId' in value) {
     return Response.json({ error: 'identity_must_not_be_supplied' }, { status: 400 });
   }
-  if (!isSafeOperationId(value.operationId) || !isMessages(value.messages)) {
+  if (
+    Object.keys(value).some((key) => key !== 'operationId' && key !== 'messages') ||
+    !isSafeOperationId(value.operationId) ||
+    !isMessages(value.messages)
+  ) {
     return Response.json({ error: 'invalid_request' }, { status: 400 });
   }
   return { operationId: value.operationId, messages: value.messages };
@@ -121,7 +127,7 @@ function isSafeOperationId(value: unknown): value is string {
     typeof value === 'string' &&
     value.length >= 8 &&
     value.length <= 128 &&
-    CONTROL_FREE_PATTERN.test(value)
+    OPERATION_ID_PATTERN.test(value)
   );
 }
 
@@ -133,6 +139,7 @@ function isMessages(value: unknown): value is ChatMessage[] {
     value.every(
       (message) =>
         isRecord(message) &&
+        Object.keys(message).every((key) => key === 'role' || key === 'content') &&
         typeof message.role === 'string' &&
         message.role.length > 0 &&
         message.role.length <= 32 &&
@@ -144,4 +151,39 @@ function isMessages(value: unknown): value is ChatMessage[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function readOperationInput(request: Request): Promise<unknown> {
+  if (
+    request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !==
+    'application/json'
+  )
+    return null;
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const parts: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 256 * 1024) {
+        void reader.cancel().catch(() => undefined);
+        return null;
+      }
+      parts.push(value);
+    }
+    const combined = new Uint8Array(bytes);
+    let offset = 0;
+    for (const part of parts) {
+      combined.set(part, offset);
+      offset += part.byteLength;
+    }
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(combined)) as unknown;
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
 }

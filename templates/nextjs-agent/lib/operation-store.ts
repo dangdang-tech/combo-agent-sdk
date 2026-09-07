@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from 'combo-agent-sdk';
 
-export type OperationStatus = 'ready' | 'waiting_for_payment' | 'completed';
+export type OperationStatus =
+  | 'ready'
+  | 'running'
+  | 'outcome_unknown'
+  | 'waiting_for_payment'
+  | 'completed';
 
 export interface OperationRecord {
   operationId: string;
@@ -41,15 +46,11 @@ export class OperationConflictError extends Error {
 }
 
 /** 仅让模板开箱运行；进程重启会清空，不能直接用于生产。 */
-class MemoryOperationStore implements OperationStore {
+export class MemoryOperationStore implements OperationStore {
   private readonly records = new Map<string, OperationRecord>();
   private readonly locks = new Map<string, Promise<void>>();
 
-  async runExclusive<T>(
-    userId: string,
-    operationId: string,
-    work: () => Promise<T>,
-  ): Promise<T> {
+  async runExclusive<T>(userId: string, operationId: string, work: () => Promise<T>): Promise<T> {
     const key = recordKey(userId, operationId);
     const previous = this.locks.get(key) ?? Promise.resolve();
     let release!: () => void;
@@ -114,4 +115,5 @@ const shared = globalThis as typeof globalThis & {
 };
 
 export const operationStore =
-  shared.comboReferenceOperationStore ?? (shared.comboReferenceOperationStore = new MemoryOperationStore());
+  shared.comboReferenceOperationStore ??
+  (shared.comboReferenceOperationStore = new MemoryOperationStore());
