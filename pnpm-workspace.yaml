@@ -1,2 +1,5 @@
+packages:
+  - templates/nextjs-agent
+
 allowBuilds:
   esbuild: true

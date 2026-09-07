@@ -1,5 +1,6 @@
 // entitlement：读计费服务的钱包读模型（余额 + 冻结），权益判定下沉 Agent 的落点。
 // SDK 不缓存读模型；调用方自行决定缓存策略。
+import { readBoundedJsonResponse } from './http-response.js';
 
 export class EntitlementError extends Error {
   constructor(
@@ -41,12 +42,22 @@ export function createEntitlementClient(options: {
     async check(userId) {
       const response = await fetchImpl(
         `${options.billingUrl}/billing/wallets/${encodeURIComponent(userId)}`,
-        { headers: { authorization: `Bearer ${options.internalToken}` } },
+        {
+          headers: { authorization: `Bearer ${options.internalToken}` },
+          redirect: 'error',
+        },
       );
       if (response.status !== 200) {
         throw new EntitlementError(response.status, `wallet read failed: ${response.status}`);
       }
-      const body = (await response.json()) as { data?: Record<string, unknown> };
+      let body: { data?: Record<string, unknown> };
+      try {
+        body = (await readBoundedJsonResponse(response, 64 * 1_024)) as {
+          data?: Record<string, unknown>;
+        };
+      } catch {
+        throw new EntitlementError(200, 'wallet response is invalid');
+      }
       const data = body.data;
       if (!data) throw new EntitlementError(200, 'wallet response missing data');
       return {
