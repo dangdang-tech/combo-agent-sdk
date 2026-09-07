@@ -192,6 +192,14 @@ Reference Agent 在调用模型前保存 running 状态。遇到无法确认结�
 
 [Reference Agent](templates/nextjs-agent/README.md) 包含 Agent 路由、业务存储接口和 Host 支付协调示例。附带的业务内存存储会在重启后丢失；正式业务必须提供耐久存储与跨实例锁，Host 也必须实现自己的支付尝试存储。
 
+## 接入自检
+
+构建或安装锁定工件后，运行 `node node_modules/combo-agent-sdk/scripts/conformance.mjs`。它不联网、不创建真实订单，输出 `offline_client_contract_only`；检查的是客户端合同和工件内的协议校验值。
+
+在 Agent 配置环境中运行 `node node_modules/combo-agent-sdk/scripts/doctor.mjs`，检查缺失、非法配置和不应注入 Agent 的平台密钥名字。加 `--online` 才向配置的 Authz 换取每 Agent 令牌并验证签名和归属；不会调用模型、创建支付或入账。命令只输出低敏结果，不显示令牌、密钥或原始异常。
+
+这两个命令不能替代平台 Sandbox、真实 Host 或盲交接验收。当前用户身份、真实渠道到账、业务结果持久化与真实环境的重复恢复仍要另行验证。
+
 ## 本期不包含
 
 主动充值、退款、订阅、分账、税务、多币种、Agent 直连渠道、SDK 持久化或自动恢复业务。完整真实支付验收仍以 Combo #308 的平台验收为准。

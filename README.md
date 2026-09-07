@@ -2,7 +2,7 @@
 
 **Combo 平台 Agent 开发套件** — 运行时 SDK + 可启动的 Next.js 示例，让 Agent 接入平台身份、模型、钱包读模型和托管支付。
 
-> 交付状态：UNRELEASED / PARTIAL。`0.1.0` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，真实支付渠道、收银台、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
+> 交付状态：UNRELEASED / PARTIAL。`0.1.0` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，平台渠道与收银台在分阶段交付。真实环境、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
 ![ESM](https://img.shields.io/badge/ESM-only-f7df1e)
@@ -149,7 +149,19 @@ pnpm typecheck:test # 测试代码类型检查
 pnpm test           # 协议、安全和 Reference Agent 测试
 pnpm verify:contract -- --upstream # 核对锁定协议来源
 pnpm prepack        # 打包前构建（tsc -b 输出 dist/）
+pnpm conformance    # 已安装工件的离线客户端合同自检，不联网
+pnpm doctor         # 检查当前 Agent 的环境配置，不联网
+pnpm doctor -- --online # 明确选择后才向 Authz 换取令牌并验签，不调用模型或支付
 ```
+
+安装 tgz 的消费方也可以运行同样的自检：
+
+```bash
+node node_modules/combo-agent-sdk/scripts/conformance.mjs
+node --env-file=.env.local node_modules/combo-agent-sdk/scripts/doctor.mjs
+```
+
+doctor 只输出检查结果和有问题的配置项名字，不输出配置值；online 只验证 Agent 凭据及签名，不验证当前用户或真实支付。conformance 用内存响应检查流式/非流式 402、Host 消息、创建结果不确定时的原编号找回及等待完成，不需要平台账号。输出中的 PASS 仅限各自声明的 scope；Host 验收仍为 NOT_RUN，不能据此宣布支付上线。
 
 ## 本期边界
 
