@@ -15,6 +15,8 @@
   },
   "files": [
     "dist",
+    "contracts",
+    "scripts/verify-payment-contract.mjs",
     "PAYMENT_SDK_INTEGRATION.md",
     "AGENT.md",
     "templates/nextjs-agent/.env.example",
@@ -22,6 +24,7 @@
     "templates/nextjs-agent/agent.yaml",
     "templates/nextjs-agent/app",
     "templates/nextjs-agent/lib",
+    "!templates/nextjs-agent/lib/**/*.test.ts",
     "templates/nextjs-agent/next-env.d.ts",
     "templates/nextjs-agent/package.json",
     "templates/nextjs-agent/tsconfig.json"
@@ -36,12 +39,15 @@
     "typecheck": "tsc -b --noEmit false",
     "typecheck:test": "tsc -p tsconfig.vitest.json",
     "test": "vitest run",
+    "verify:contract": "node scripts/verify-payment-contract.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
     "jose": "^5.10.0"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

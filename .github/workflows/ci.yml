@@ -64,6 +64,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Verify locked Combo payment contract
+        run: npm run verify:contract -- --upstream
+
       - name: Build SDK
         run: npm run build
 
@@ -93,6 +96,10 @@ jobs:
             'dist/index.d.ts',
             'dist/payments.js',
             'dist/payments.d.ts',
+            'contracts/payment-v1.openapi.json',
+            'contracts/payment-contract.lock.json',
+            'scripts/verify-payment-contract.mjs',
+            'templates/nextjs-agent/lib/host-payment.ts',
             'templates/nextjs-agent/.env.example',
             'templates/nextjs-agent/README.md',
             'templates/nextjs-agent/agent.yaml',
@@ -110,6 +117,7 @@ jobs:
           ];
           const missing = required.filter((path) => !files.has(path));
           const forbidden = [...files].filter((path) =>
+            /\.test\.tsx?$/.test(path) ||
             /(^|\/)(?:\.next|node_modules)(?:\/|$)/.test(path) ||
             (/(^|\/)\.env(?:$|\.)/.test(path) && !path.endsWith('/.env.example')),
           );
