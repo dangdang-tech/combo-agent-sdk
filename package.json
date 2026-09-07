@@ -17,6 +17,8 @@
     "dist",
     "contracts",
     "scripts/verify-payment-contract.mjs",
+    "scripts/doctor.mjs",
+    "scripts/conformance.mjs",
     "PAYMENT_SDK_INTEGRATION.md",
     "AGENT.md",
     "templates/nextjs-agent/.env.example",
@@ -40,6 +42,8 @@
     "typecheck:test": "tsc -p tsconfig.vitest.json",
     "test": "vitest run",
     "verify:contract": "node scripts/verify-payment-contract.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "conformance": "node scripts/conformance.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
