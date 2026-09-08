@@ -3,7 +3,7 @@
 // 可直接交给 Next.js 路由处理器透传。
 import { LlmGatewayError } from './llm-error.js';
 import { readBoundedJsonResponse } from './http-response.js';
-import { parsePaymentRequiredError } from './payments.js';
+import { parsePaymentRequiredError, hasRetryableErrorEnvelope } from './payments.js';
 import {
   AgentAccessError,
   trustedServiceUrl,
@@ -243,7 +243,7 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
         const json = await readGatewayErrorJson(response);
         throw (
           parsePaymentRequiredError(response.status, json) ??
-          new LlmGatewayError(response.status, json)
+          new LlmGatewayError(response.status, json, undefined, confirmedRetry(response, json))
         );
       }
       try {
@@ -263,7 +263,7 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
         const body = await readGatewayErrorJson(response);
         throw (
           parsePaymentRequiredError(response.status, body) ??
-          new LlmGatewayError(response.status, body)
+          new LlmGatewayError(response.status, body, undefined, confirmedRetry(response, body))
         );
       }
       if (!response.body || !isEventStreamResponse(response)) {
@@ -289,6 +289,14 @@ async function readGatewayErrorJson(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+function confirmedRetry(response: Response, body: unknown): boolean {
+  return (
+    response.status === 502 &&
+    response.headers.get('x-combo-call-outcome') === 'failed_no_charge' &&
+    hasRetryableErrorEnvelope(body)
+  );
 }
 
 function isEventStreamResponse(response: Response): boolean {

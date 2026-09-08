@@ -2,22 +2,30 @@
 export class LlmGatewayError extends Error {
   readonly status!: number;
   readonly body!: unknown;
+  /** True only when the trusted Gateway explicitly confirms a failed, zero-charge attempt. */
+  readonly canRetrySameCall!: boolean;
 
   toJSON(): Record<string, unknown> {
-    return { name: this.name, status: this.status, message: this.message };
+    return {
+      name: this.name,
+      status: this.status,
+      message: this.message,
+      canRetrySameCall: this.canRetrySameCall,
+    };
   }
 
   [Symbol.for('nodejs.util.inspect.custom')](): Record<string, unknown> {
     return this.toJSON();
   }
 
-  constructor(status: number, body: unknown, message?: string) {
+  constructor(status: number, body: unknown, message?: string, canRetrySameCall = false) {
     super(message ?? `llm gateway returned ${status}`);
     Object.defineProperties(this, {
       name: { value: 'LlmGatewayError', configurable: true, enumerable: false },
       status: { value: status, enumerable: true },
       // 错误 body 仍可显式读取以兼容旧调用方，但默认 JSON/日志不会展开它。
       body: { value: body, enumerable: false },
+      canRetrySameCall: { value: canRetrySameCall, enumerable: true },
     });
   }
 }

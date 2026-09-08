@@ -1022,6 +1022,12 @@ function parseApiError(
   }
 }
 
+/** Internal shared ErrorEnvelope validation; this hint alone never authorizes a model retry. */
+export function hasRetryableErrorEnvelope(value: unknown): boolean {
+  const error = parseApiError(502, value);
+  return error instanceof PaymentHttpError && error.retriable === true && error.action === 'retry';
+}
+
 function mapHttpErrorCode(status: number): PaymentApiErrorCode {
   if (status === 400 || status === 422) return 'invalid_request';
   if (status === 401) return 'unauthorized';
