@@ -2,7 +2,7 @@
 
 **Combo 平台 Agent 开发套件** — 运行时 SDK + 可启动的 Next.js 示例，让 Agent 接入平台身份、模型、钱包读模型和托管支付。
 
-> 交付状态：UNRELEASED / PARTIAL。`0.1.0` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，平台渠道与收银台在分阶段交付。真实环境、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
+> 交付状态：UNRELEASED / PARTIAL。`0.1.1` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，平台渠道与收银台在分阶段交付。真实环境、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
 ![ESM](https://img.shields.io/badge/ESM-only-f7df1e)
@@ -15,7 +15,7 @@
 
 | SDK          | Node.js    | Payment API                        | 状态                 |
 | ------------ | ---------- | ---------------------------------- | -------------------- |
-| `0.1.0` 源码 | `>=20.9.0` | `/v1/payments`（Combo `84d75d8c`） | UNRELEASED / PARTIAL |
+| `0.1.1` 源码 | `>=20.9.0` | `/v1/payments`（Combo `84d75d8c`） | UNRELEASED / PARTIAL |
 
 支付协议随包附带于 `contracts/`，锁定来源与 SHA-256；`npm run verify:contract -- --upstream` 可以核对上游文件。
 
@@ -48,7 +48,7 @@ pnpm build
 pnpm pack --pack-destination ./artifacts
 
 # 在消费方仓库安装刚生成并锁定的文件
-npm install /path/to/artifacts/combo-agent-sdk-0.1.0.tgz
+npm install /path/to/artifacts/combo-agent-sdk-0.1.1.tgz
 ```
 
 锁定 Git SHA 安装时，包的 `prepare` 会先生成 `dist`。不要使用未锁定分支，也不要把当前未发布版本写成 npm semver 依赖。

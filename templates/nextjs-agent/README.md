@@ -2,7 +2,7 @@
 
 这是一个可以直接安装、构建和启动的 Next.js 示例。它展示业务与支付的边界：
 
-> 当前随 SDK `0.1.0` 源码提供，状态为 `UNRELEASED / PARTIAL`。它验证本地合同，不代表真实 Payment API、Sandbox 或跨仓链路已经上线。
+> 当前随 SDK `0.1.1` 源码提供，状态为 `UNRELEASED / PARTIAL`。它验证本地合同，不代表真实 Payment API、Sandbox 或跨仓链路已经上线。
 > 模板使用每 Agent 独立凭据换取短期模型访问令牌，不接受共享平台 token。运行环境仍须完成对应身份配置与代理 Cookie 隔离，模块测试不能替代这一步。
 
 - 业务保存 `operationId`、原始请求、稳定 `callId`、状态和结果。
