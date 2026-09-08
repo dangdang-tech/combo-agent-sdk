@@ -1,6 +1,7 @@
 import {
   AssertionVerificationError,
   AgentAccessError,
+  LlmGatewayError,
   PaymentRequiredError,
   createPaymentHostMessage,
   extractAssertion,
@@ -93,6 +94,13 @@ async function runOperation(operation: OperationRecord, userAssertion: string): 
       });
       // 402 正文严格只有 version/type/paymentToken。金额与收银台地址由 Host 向 Combo 重查。
       return Response.json(createPaymentHostMessage(error), { status: 402 });
+    }
+    if (error instanceof LlmGatewayError && error.canRetrySameCall) {
+      await operationStore.save({ ...operation, status: 'ready' });
+      return Response.json(
+        { error: 'model_failed_without_charge', retryable: true },
+        { status: 503 },
+      );
     }
     await operationStore.save({ ...operation, status: 'outcome_unknown' });
     return Response.json({ error: 'operation_outcome_unknown' }, { status: 502 });

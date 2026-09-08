@@ -94,6 +94,20 @@ describe('business-owned operation recovery', () => {
     expect(mocks.llm.mock.calls[1]?.[0].callId).toBe(mocks.llm.mock.calls[0]?.[0].callId);
   });
 
+  it('retries a confirmed zero-charge failure with the original IDs, then returns the saved result', async () => {
+    mocks.llm
+      .mockRejectedValueOnce(new LlmGatewayError(502, null, undefined, true))
+      .mockResolvedValueOnce({ answer: 'recovered' });
+    const first = await handleNewOperation(request());
+    expect(first.status).toBe(503);
+    expect(await first.json()).toEqual({ error: 'model_failed_without_charge', retryable: true });
+    expect((await handleResumeOperation(request(), operationId)).status).toBe(200);
+    expect((await handleResumeOperation(request(), operationId)).status).toBe(200);
+    expect(mocks.llm).toHaveBeenCalledTimes(2);
+    expect(mocks.llm.mock.calls[1]?.[0].callId).toBe(mocks.llm.mock.calls[0]?.[0].callId);
+    expect(mocks.llm.mock.calls[1]?.[0].operationId).toBe(operationId);
+  });
+
   it('rejects changed input and another user cannot resume this operation', async () => {
     mocks.llm.mockResolvedValue({ answer: 'saved' });
     await handleNewOperation(request());

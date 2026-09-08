@@ -65,6 +65,8 @@ POST /api/operations/{operationId}/resume
 
 取 Agent 访问令牌失败时尚未调用模型，业务保留原状态与编号，可稍后重试；模型请求发出后结果不确定则保留 outcome_unknown，不自动再次调用。
 
+SDK 明确返回 `canRetrySameCall=true` 时，示例把业务状态恢复为 ready；后续请求复用原 operationId、callId 与正文。成功结果仍只由业务保存，重复恢复直接返回它，不重复调用模型。
+
 operationId 必须为 8–128 字符的规范 ASCII 编号。调用方不可以提交 callId、paymentToken、requestKey 或其他未声明字段。Host 在自己的业务上下文中保存 operationId，并用 `encodeURIComponent(operationId)` 构造恢复路径；三字段支付消息不携带业务编号。
 
 SDK 协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`，OpenAPI 校验值见 SDK 的 `contracts/payment-contract.lock.json`。HTTP 402 使用 `error.payment`，支付状态不回显 requestKey。
