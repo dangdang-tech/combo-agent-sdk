@@ -37,6 +37,7 @@ describe('confirmed same-call retry', () => {
         mode === 'json' ? sdk.chatCompletion(input) : sdk.chatCompletionStream(input)
       ).catch((e) => e);
       expect(error).toBeInstanceOf(LlmGatewayError);
+      if (!(error instanceof LlmGatewayError)) throw error;
       expect(error.canRetrySameCall).toBe(true);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       fetchImpl.mockResolvedValue(
@@ -62,6 +63,7 @@ describe('confirmed same-call retry', () => {
       const e = await client(async () => response)
         .chatCompletion(input)
         .catch((e) => e);
+      if (!(e instanceof LlmGatewayError)) throw e;
       expect(e.canRetrySameCall).toBe(false);
     }
     const error = await client(async () => {
@@ -69,6 +71,7 @@ describe('confirmed same-call retry', () => {
     })
       .chatCompletion(input)
       .catch((e) => e);
+    if (!(error instanceof LlmGatewayError)) throw error;
     expect(error.canRetrySameCall).toBe(false);
   });
 });
