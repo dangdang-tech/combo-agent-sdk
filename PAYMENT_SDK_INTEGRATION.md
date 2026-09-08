@@ -186,6 +186,16 @@ SDK 本地错误类别只由真实 HTTP 状态决定。服务端 userMessage、r
 
 ## 业务如何继续
 
+`0.1.1` 增加 `LlmGatewayError.canRetrySameCall`。只有受信中台返回 502、明确的 `x-combo-call-outcome: failed_no_charge` 响应头和合法错误正文时，该值才为 true；普通 502、503、网络中断、409 或畸形正文均为 false。
+
+| SDK 判断                    | 业务如何处理                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| canRetrySameCall 为 true。  | 将原业务请求恢复为可执行，复用原 operationId、callId 和正文，不再要求用户付款。 |
+| canRetrySameCall 为 false。 | 保留结果不确定状态，不自动再次调用，也不换编号。                                |
+| 已经保存成功结果。          | 返回业务保存的结果，不再请求模型。                                              |
+
+SDK 不自动重试或保存状态。Reference Agent 的业务存储示例会保存上述判断；平台内部另行记录执行尝试，不把内部执行编号交给业务管理。
+
 业务恢复入口必须验证当前用户的新身份，读取自己的原请求，复用原 operationId 和 callId。已完成时直接返回保存的结果；同一用户与 operationId 串行执行。
 
 Reference Agent 在调用模型前保存 running 状态。遇到无法确认结果的错误时保存 outcome_unknown，重复恢复返回 409，避免再次调用模型。业务应单独处理这类不确定结果；支付 SDK 不提供原模型结果找回能力。

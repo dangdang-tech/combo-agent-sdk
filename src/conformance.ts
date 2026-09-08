@@ -1,4 +1,4 @@
-import { createLlmClient } from './llm.js';
+import { createLlmClient, LlmGatewayError } from './llm.js';
 import {
   createPaymentClient,
   createPaymentHostMessage,
@@ -149,6 +149,41 @@ export async function runPaymentClientConformance(): Promise<ConformanceReport> 
     'waiting did not use authoritative completion',
   );
   checks.push('bounded_completion_wait');
+  const requests: string[] = [];
+  const retryClient = createLlmClient({
+    gatewayUrl: 'https://unused.invalid',
+    defaultModel: 'fixture-model',
+    accessTokenProvider: {
+      async getAccessToken() {
+        return 'fixture.agent.token';
+      },
+    },
+    fetchImpl: async (_url, init) => {
+      requests.push(String(init?.body));
+      return requests.length === 1
+        ? Response.json(
+            {
+              error: {
+                userMessage: 'retry original',
+                retriable: true,
+                action: 'retry',
+                traceId: 'conformance-retry',
+              },
+            },
+            { status: 502, headers: { 'x-combo-call-outcome': 'failed_no_charge' } },
+          )
+        : Response.json({ choices: [{ message: { role: 'assistant', content: 'recovered' } }] });
+    },
+  });
+  const retryError = await retryClient.chatCompletion(input).catch((error) => error);
+  assert(
+    retryError instanceof LlmGatewayError && retryError.canRetrySameCall,
+    'confirmed failure not recognized',
+  );
+  assert(requests.length === 1, 'SDK retried automatically');
+  await retryClient.chatCompletion(input);
+  assert(requests[0] === requests[1], 'retry changed the original business request');
+  checks.push('confirmed_failure_same_call_retry');
   return {
     result: 'PASS',
     scope: 'offline_client_contract_only',

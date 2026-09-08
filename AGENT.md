@@ -37,6 +37,7 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 - 不在重试时生成新的 `callId` 或 `requestKey`；
 - 不把模板内存存储当作生产存储；
 - 不在模型调用结果不确定时自动重试；先保留 running/outcome_unknown 状态并由业务找回结果；
+- 只有 `LlmGatewayError.canRetrySameCall === true` 时，才可将原业务请求恢复为 ready 并复用原编号；不能仅凭 HTTP 502 或零费用猜测失败。
 - 不声称退款、订阅、分账、多币种或真实 Sandbox 已实现；doctor 与离线 conformance 不等于真实支付验收。
 
 ## 接入顺序
