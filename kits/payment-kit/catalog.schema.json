@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Payment Kit draft catalog (not a payment API)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kitVersion", "status", "catalogVersion", "creatorId", "agentId", "money", "credits", "packages", "services", "trial", "policies"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "kitVersion": { "const": "1.0.0" },
+    "status": { "const": "draft" },
+    "catalogVersion": { "$ref": "#/definitions/id" },
+    "creatorId": { "$ref": "#/definitions/id" },
+    "agentId": { "$ref": "#/definitions/id" },
+    "money": {
+      "type": "object", "additionalProperties": false, "required": ["currency", "minorUnitExponent"],
+      "properties": { "currency": { "const": "CNY" }, "minorUnitExponent": { "const": 2 } }
+    },
+    "credits": {
+      "type": "object", "additionalProperties": false, "required": ["unit", "displayName", "scope"],
+      "properties": { "unit": { "const": "service_credit" }, "displayName": { "$ref": "#/definitions/name" }, "scope": { "const": "creator_agent" } }
+    },
+    "packages": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "$ref": "#/definitions/package" } },
+    "services": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/definitions/service" } },
+    "trial": {
+      "type": "object", "additionalProperties": false, "required": ["ruleId", "trigger", "credits", "grantLimitPerUser"],
+      "properties": {
+        "ruleId": { "$ref": "#/definitions/id" }, "trigger": { "const": "onboarding_completed" },
+        "credits": { "$ref": "#/definitions/credits" }, "grantLimitPerUser": { "const": 1 }
+      }
+    },
+    "policies": {
+      "type": "object", "additionalProperties": false,
+      "required": ["consumptionOrder", "settlement", "unknownOutcome", "expiry", "refund", "collectionRoute", "paymentChannel"],
+      "properties": {
+        "consumptionOrder": { "const": "bonus_first" },
+        "settlement": { "const": "successful_business_operation" },
+        "unknownOutcome": { "const": "hold_and_reconcile" },
+        "expiry": { "const": "undecided" }, "refund": { "const": "undecided" },
+        "collectionRoute": { "enum": ["undecided", "creator_direct", "platform_collects"] },
+        "paymentChannel": { "$ref": "#/definitions/id" }
+      }
+    }
+  },
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "credits": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "package": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "amountMinor", "purchasedCredits", "bonusCredits"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/name" },
+        "amountMinor": { "type": "integer", "minimum": 1, "maximum": 999999999999999 },
+        "purchasedCredits": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "bonusCredits": { "$ref": "#/definitions/credits" }
+      }
+    },
+    "service": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "creditsPerOperation", "chargeUnit"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/name" },
+        "creditsPerOperation": { "$ref": "#/definitions/credits" }, "chargeUnit": { "const": "business_operation" }
+      }
+    }
+  }
+}
