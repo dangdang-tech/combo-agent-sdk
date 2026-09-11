@@ -1,179 +1,118 @@
-# combo-agent-sdk
+# Combo Agent SDK
 
-**Combo 平台 Agent 开发套件** — 运行时 SDK + 可启动的 Next.js 示例，让 Agent 接入平台身份、模型、钱包读模型和托管支付。
+让你开发的 Agent 使用 Combo 的登录身份、模型调用和托管支付。用户余额不足时，可以前往 Combo 收银台付款，再继续刚才的任务。
 
-> 交付状态：UNRELEASED / PARTIAL。`0.1.1` 尚未发布。SDK 已接入每 Agent 短期身份和当前用户断言，平台渠道与收银台在分阶段交付。真实环境、Sandbox 和完整验收仍未完成。模块测试不能证明对外支付链路可用，也不能据此关闭 Combo #308。
+本仓提供 TypeScript SDK 和可启动的 Next.js 示例。支付后的任务保存、继续和结果复用由你的应用完成，示例已经展示这套写法。
 
-![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
-![ESM](https://img.shields.io/badge/ESM-only-f7df1e)
-![Runtime](https://img.shields.io/badge/Node%20%C2%B7%20Edge-ready-339933)
-![Deps](https://img.shields.io/badge/deps-jose%20only-blue)
+## 你可以用它做什么
 
-> 原属 combo 主仓 `packages/agent-sdk`，现独立维护。正式交付时使用锁定的 tarball 或完整 Git SHA，不发布 npm 浮动版本。
+| 你想实现的体验 | 已有能力 | 从哪里开始 |
+| --- | --- | --- |
+| 知道当前用户是谁，并拒绝冒用身份 | 验证平台签发的用户身份；为每个 Agent 获取短期访问令牌。 | [身份接入](PAYMENT_SDK_INTEGRATION.md#身份与模型接入) |
+| 调用模型，返回完整回答或逐字输出 | 普通 JSON 调用和 SSE 流式调用。 | [普通调用](PAYMENT_SDK_INTEGRATION.md#普通调用与余额不足)、[流式调用](PAYMENT_SDK_INTEGRATION.md#流式调用) |
+| 余额不足时引导用户付款 | 识别需要付款的响应，把平台凭证交给承载聊天界面的应用，由它打开 Combo 收银台。 | [付款并继续](PAYMENT_SDK_INTEGRATION.md#付款并继续) |
+| 网络断开后找回原支付单 | 用保存的支付请求编号查询原单，避免重复下单。 | [创建结果不确定](PAYMENT_SDK_INTEGRATION.md#错误和创建结果不确定) |
+| 付款后继续原任务，重复点击不重复执行 | 示例保存原请求和结果；已成功的任务返回保存结果。 | [业务如何继续](PAYMENT_SDK_INTEGRATION.md#业务如何继续) |
+| 模型明确失败且没扣钱时重试 | `0.1.1` 提供 `canRetrySameCall` 判断，应用据此让用户重试原任务。 | [错误处理表](PAYMENT_SDK_INTEGRATION.md#遇到问题时怎么处理) |
+| 检查安装包和接入配置 | 离线协议自检和配置诊断命令。 | [接入自检](PAYMENT_SDK_INTEGRATION.md#接入自检) |
 
-## 兼容矩阵
+**第一次接入请读[支付使用手册](PAYMENT_SDK_INTEGRATION.md)**；想先运行代码，请看 [Next.js 示例](templates/nextjs-agent/README.md)；让编码 Agent 帮你接入，请同时提供 [AGENT.md](AGENT.md)。
 
-| SDK          | Node.js    | Payment API                        | 状态                 |
-| ------------ | ---------- | ---------------------------------- | -------------------- |
-| `0.1.1` 源码 | `>=20.9.0` | `/v1/payments`（Combo `84d75d8c`） | UNRELEASED / PARTIAL |
+## 当前版本与完成情况
 
-支付协议随包附带于 `contracts/`，锁定来源与 SHA-256；`npm run verify:contract -- --upstream` 可以核对上游文件。
+当前源码版本为 **0.1.1，私有预发布（UNRELEASED / PARTIAL）**。支付客户端、身份接入、付款后继续的示例和失败重试判断均已实现；还没有正式 Tag、Release 或 npm 发布。
 
-Reference Agent 固定使用 Next.js `16.3.4`。只有跨仓实现、Test Sandbox 和 conformance 都通过后，Payment API 一栏才能改成可用版本。
+| 项目 | 对应版本或证据 |
+| --- | --- |
+| 本手册的 SDK 实现基线 | `665fdff8f82019d32d1099528ec0f0d1a15508a2`，包含 [SDK #1](https://github.com/dangdang-tech/combo-agent-sdk/pull/1)、[#3](https://github.com/dangdang-tech/combo-agent-sdk/pull/3)、[#4](https://github.com/dangdang-tech/combo-agent-sdk/pull/4)、[#5](https://github.com/dangdang-tech/combo-agent-sdk/pull/5)。 |
+| 运行与安装 | SDK 支持 Node.js `>=20.9.0`；源码安装使用 Node.js 24 和 pnpm `11.0.9`。示例使用 Next.js `16.3.4`。 |
+| 支付接口格式 | `/v1/payments`，协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；随包提供 [OpenAPI 与校验值](contracts/payment-contract.lock.json)。这不是部署版本号。 |
+| 既有验证 | [2026-09-08 验证记录](https://github.com/dangdang-tech/Combo/issues/308#issuecomment-5583137476)记录了 SDK 87 项测试、安装消费检查、支付后恢复与失败重试联调。记录包含真实调用和测试替身，整体为 Mixed。 |
+| 仍需完成 | 正式版本发布，以及陌生接入者仅凭文档、锁定工件和受限 Test 配置完成整个支付流程的验收，继续由 [Combo #308](https://github.com/dangdang-tech/Combo/issues/308) 跟踪。 |
 
-## 能力一览
+可以基于锁定源码或平台提供的工件开展接入；是否能在你的环境付款，还取决于平台为你开通的身份、收银台与 Host 配置。上述记录不表示任意环境或 Production 已可用。
 
-`0.1.1` 增加明确的失败恢复判断：`LlmGatewayError.canRetrySameCall` 为 true 时，中台已经确认该次失败且未扣费，业务可用原编号重试。SDK 不自动执行重试；付款协议保持原版本不变。
+## 开始使用
 
-| 模块           | 能力                                                                                    | 对接的平台服务   |
-| -------------- | --------------------------------------------------------------------------------------- | ---------------- |
-| `assertion`    | 验证 ForwardAuth 注入的 JWT 身份断言（JWKS 缓存 + kid 轮换，audience 强制等于本 Agent） | authz            |
-| `agent-access` | 使用每 Agent 凭据换取五分钟访问令牌，仅在内存短暂缓存。                                 | authz            |
-| `llm`          | 使用 Agent 令牌与当前用户断言调用模型，传递业务的 operationId 和 callId，支持流式响应。 | llm-gateway      |
-| `entitlement`  | 保留历史验证栈的钱包查询；依赖内部凭据，不适用于外部 Agent。                            | billing          |
-| `payments`     | 标准 402、Host 安全交接、支付创建与状态查询；不保存业务数据                             | billing 支付中台 |
+### 安装并检查 SDK
 
-SDK 不持有支付渠道密钥。Payment Client 使用 Host 当前浏览器会话；其 Bearer 适配接口留作扩展，当前 Combo 支付服务尚未支持该模式，不能拿 Agent 访问令牌代替用户会话。
-
-支付接入的完整合同见 [PAYMENT_SDK_INTEGRATION.md](PAYMENT_SDK_INTEGRATION.md)。
-
-## 快速开始
-
-### 1. 安装
+需要本仓访问权限。下面固定到已有支付能力的源码版本，不依赖未发布的 npm 包名；使用平台交付的新版本时，同时更新完整 SHA 和工件校验值。
 
 ```bash
-git checkout <完整提交 SHA>
+git clone https://github.com/dangdang-tech/combo-agent-sdk.git
+cd combo-agent-sdk
+git checkout 665fdff8f82019d32d1099528ec0f0d1a15508a2
+
+# 使用 Node.js 24、pnpm 11.0.9。
 pnpm install --frozen-lockfile
 pnpm build
+pnpm conformance
+```
+
+`conformance` 的 `offline_client_contract_only` 表示安装包内的客户端协议检查通过；这一步不需要账号，也不创建支付。
+
+在已有应用中使用时，把 SDK 打包后安装到你的应用：
+
+```bash
+# 在 SDK 仓库运行。
+mkdir -p artifacts
 pnpm pack --pack-destination ./artifacts
+shasum -a 256 artifacts/combo-agent-sdk-0.1.1.tgz
 
-# 在消费方仓库安装刚生成并锁定的文件
-npm install /path/to/artifacts/combo-agent-sdk-0.1.1.tgz
+# 在你的应用目录运行，替换为上面生成文件的绝对路径。
+npm install /absolute/path/to/combo-agent-sdk/artifacts/combo-agent-sdk-0.1.1.tgz
+node node_modules/combo-agent-sdk/scripts/conformance.mjs
 ```
 
-锁定 Git SHA 安装时，包的 `prepare` 会先生成 `dist`。不要使用未锁定分支，也不要把当前未发布版本写成 npm semver 依赖。
+自己打包时保存完整源码 SHA 和计算出的 SHA-256。使用平台发来的安装包时，先将本地计算结果与交付方提供的校验值比较，一致后再安装；不要仅凭文件名判断版本。
 
-### 2. 配置环境变量
+### 运行示例，或接入已有应用
 
-本地开发自行设置；平台上由 `agent.yaml` 声明名字、平台注入值。启动即校验，缺失一次性全报：
+- **先运行示例**：按[示例运行步骤](templates/nextjs-agent/README.md#运行)启动服务，再通过已配置登录与身份转交的 Combo Host 调用它。首页是服务说明页；聊天界面和收银台入口由 Host 提供。
+- **接入已有应用**：按[支付使用手册](PAYMENT_SDK_INTEGRATION.md)配置身份、调用模型、接入支付界面和业务恢复。手册区分 SDK API、模板代码和你需要实现的存储/界面适配。
 
-| 环境变量                        | 说明                                                      |
-| ------------------------------- | --------------------------------------------------------- |
-| `COMBO_AGENT_ID`                | 本 Agent 的平台标识，断言验签强制 aud 等于它              |
-| `COMBO_AUTHZ_URL`               | 平台身份服务地址。                                        |
-| `COMBO_AGENT_CREDENTIAL_ID`     | 平台分配给当前 Agent 的独立凭据编号。                     |
-| `COMBO_AGENT_CREDENTIAL_SECRET` | 当前 Agent 服务端专用的随机凭据，只用于换取短期访问令牌。 |
-| `COMBO_LLM_GATEWAY_URL`         | 模型网关地址                                              |
-| `COMBO_JWKS_URL`                | authz 的 JWKS 端点                                        |
-| `COMBO_ASSERTION_ISSUER`        | 必填，受信身份签发方。                                    |
+## 接入前准备什么
 
-默认所有地址必须使用 HTTPS。本地桩测试可显式设置 `COMBO_ALLOW_HTTP_FOR_TEST=true`，production 不允许此开关。正式配置拒绝 `COMBO_PLATFORM_INTERNAL_TOKEN`，也不再要求 Agent 配置 Billing 内部地址或钱包密钥。
+从 Combo 平台取得受限 Test 配置。以下变量放在 **Agent 服务端**，不要放到浏览器代码中：
 
-### 3. 最小接入示例
+| 环境变量 | 用途 |
+| --- | --- |
+| `COMBO_AGENT_ID` | 本 Agent 的平台编号，用于核对用户身份是否签发给本应用。 |
+| `COMBO_AUTHZ_URL` | 获取 Agent 短期访问令牌的服务地址。 |
+| `COMBO_AGENT_CREDENTIAL_ID` | 平台分配给本 Agent 的独立凭据编号。 |
+| `COMBO_AGENT_CREDENTIAL_SECRET` | 本 Agent 的服务端凭据，只用于换取短期令牌。 |
+| `COMBO_LLM_GATEWAY_URL` | 平台模型服务地址。 |
+| `COMBO_JWKS_URL` | 验证用户身份所需的公开验签密钥地址。 |
+| `COMBO_ASSERTION_ISSUER` | 平台确认的身份签发方。 |
+| `COMBO_LLM_MODEL` | 模板选择的模型名称；默认 `deepseek-chat`，以平台实际开通的模型为准。 |
 
-Reference Agent 的入口直接使用已经包含存储和防重复处理的业务 handler：
+Host 是承载用户聊天界面和登录会话的应用。它另外需要平台认可的支付服务地址、当前登录会话，以及取得新用户身份后调用原任务的能力。这些是 Host 的配置和代码，不是 SDK 自动生成的功能。
 
-```ts
-// templates/nextjs-agent/app/api/chat/route.ts
-import { handleNewOperation } from '../../../lib/operation-handler';
+不需要支付渠道或商户密钥。每个 Agent 只使用自己的凭据；历史 `entitlement` 钱包查询接口依赖内部凭据，不作为外部 Agent 的支付接入步骤。当前支付接口使用 Host 浏览器会话，不能用 Agent 的模型访问令牌代替。
 
-export const runtime = 'nodejs';
-export async function POST(request: Request): Promise<Response> {
-  return handleNewOperation(request);
-}
-```
+正式服务地址使用 HTTPS。`COMBO_ALLOW_HTTP_FOR_TEST=true` 仅供明确的本地测试，production 拒绝此开关；配置中也不得包含共享 `COMBO_PLATFORM_INTERNAL_TOKEN`。
 
-调用方只提供业务 operationId 和 messages。业务后端在创建记录时生成并保存 callId，不接收外部传入的收费调用编号；支付后继续会验证新身份并复用原 callId。模型响应丢失时保存 outcome_unknown，重复恢复不会再次调用模型。
+## 开发与检查
 
-`PaymentRequiredError` 仍然继承 `LlmGatewayError`。正式模型调用必须提供 `operationId`、`callId` 和当前请求的 `userAssertion`，不能传 userId、agentId 或 turnId。原共享入口只在显式 `allowLegacyForTest: true` 且非 production 时可用，不是正式接入方式。
-
-### 4. Host 打开 Combo 托管支付
-
-Host 收到上面的短期凭证后，使用当前登录用户的浏览器会话调用支付中台：
-
-```ts
-import { createPaymentClient, parsePaymentHostMessage } from 'combo-agent-sdk';
-
-const hostMessage = parsePaymentHostMessage(await agentResponse.json());
-
-const payments = createPaymentClient({
-  paymentUrl: 'https://billing.combo.example',
-  auth: { kind: 'browser-session' },
-});
-
-const payment = await payments.create({
-  paymentToken: hostMessage.paymentToken,
-  requestKey: stableRequestKey,
-});
-```
-
-`payment.action` 只接受 Combo 受鉴权响应里的 `open_url`。Host 不能使用 Agent 自报的地址或金额。创建请求在收到响应前断开时，SDK 抛 `PaymentResultUnknownError`；此时必须用原 `requestKey` 调 `findByRequestKey()`，不能换编号再创建。
-
-不要记录 `paymentToken`，也不要记录完整 `PaymentRequiredError`。错误默认序列化已经隐藏 token、金额和原始响应，但业务日志仍应只保留 `paymentRequestId` 与 `traceId`。
-
-## 模板：templates/nextjs-agent
-
-可安装、构建和启动的 Reference Agent：fork 它、替换业务逻辑和持久化适配器，即可验证平台合同。
-
-- `agent.yaml` — Agent 与平台的唯一契约文件：端口、探针、资源、环境变量名与 capabilities。
-- `app/api/chat/route.ts` — 开始业务请求。
-- `app/api/operations/[operationId]/resume/route.ts` — 使用当前用户的新断言继续原请求。
-- `lib/operation-store.ts` — 业务持久化接口；附带的内存实现只用于本地运行。
-- `lib/host-payment.ts` — Host 保存 requestKey、找回支付、打开收银台并使用新身份继续业务的示例。
-
-细节见 [templates/nextjs-agent/README.md](templates/nextjs-agent/README.md)。
-
-## 仓库结构
-
-```
-.
-├── src/
-│   ├── config.ts       # 环境变量 → SDK 配置，缺失一次性报错
-│   ├── assertion.ts    # 断言验签：JWKS 缓存 + kid 轮换感知 + aud 强制
-│   ├── agent-access.ts # 每 Agent 凭据换取短期模型访问令牌
-│   ├── llm.ts          # 模型网关客户端：x_combo 注入、流式/非流式
-│   ├── entitlement.ts  # 钱包读模型（余额与冻结），SDK 不做缓存
-│   ├── payments.ts     # 无状态支付中台客户端与标准 402
-│   ├── index.ts        # 汇总导出
-│   └── __tests__/      # vitest，全部内存桩，不依赖真实服务
-└── templates/
-    └── nextjs-agent/   # 可启动 Reference Agent
-```
-
-## 开发
-
-仓库固定使用 pnpm `11.0.9`，它本身要求 Node.js `>=22.13`，因此依赖安装使用 Node.js 24。安装完成后，拉取请求和 `main` 更新会分别在 Node.js 20、24 上执行同一套 SDK、测试、Reference Agent 和打包门禁。
+在 Node.js 24 下安装依赖。CI 在 Node.js 20、24 下分别检查 SDK、模板与打包结果：
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm typecheck      # 生产代码类型检查（tsc -b）
-pnpm typecheck:test # 测试代码类型检查
-pnpm test           # 协议、安全和 Reference Agent 测试
-pnpm verify:contract -- --upstream # 核对锁定协议来源
-pnpm prepack        # 打包前构建（tsc -b 输出 dist/）
-pnpm conformance    # 已安装工件的离线客户端合同自检，不联网
-pnpm doctor         # 检查当前 Agent 的环境配置，不联网
-pnpm doctor -- --online # 明确选择后才向 Authz 换取令牌并验签，不调用模型或支付
+pnpm typecheck
+pnpm typecheck:test
+pnpm test
+pnpm verify:contract -- --upstream
+pnpm build
+pnpm conformance
+pnpm prepack
+pnpm --filter combo-reference-agent typecheck
+pnpm --filter combo-reference-agent build
 ```
 
-安装 tgz 的消费方也可以运行同样的自检：
+消费方配置诊断、在线身份检查的条件和结果解释见[接入自检](PAYMENT_SDK_INTEGRATION.md#接入自检)。
 
-```bash
-node node_modules/combo-agent-sdk/scripts/conformance.mjs
-node --env-file=.env.local node_modules/combo-agent-sdk/scripts/doctor.mjs
-```
+## 本期范围
 
-doctor 只输出检查结果和有问题的配置项名字，不输出配置值；online 只验证 Agent 凭据及签名，不验证当前用户或真实支付。conformance 用内存响应检查流式/非流式 402、Host 消息、创建结果不确定时的原编号找回及等待完成，不需要平台账号。输出中的 PASS 仅限各自声明的 scope；Host 验收仍为 NOT_RUN，不能据此宣布支付上线。
+支持余额不足后的托管支付。主动充值、退款、订阅、创作者分账、税务、多币种、文件存储和发布 CLI 不在本期。
 
-## 本期边界
-
-- 只完成“余额不足后支付”。主动充值、退款、订阅、分账、税务和多币种不在本期。
-- Payment SDK 不保存原请求、`operationId`、业务状态或结果，也不自动恢复业务。
-- Agent 不决定价格，不接触支付渠道，不接收回调，不保存订单和资金流水。
-- `completed` 只表示 Combo 已确认到账并完成支付侧入账；业务是否继续由业务决定。
-- storage、CLI（combo push）等能力不在本期。
-
-## 上下游
-
-- **上游服务**：authz、模型网关、钱包读模型与 `apps/billing` 支付中台。支付渠道、订单、回调、钱包和流水都留在 Combo。
-- **下游消费者**：各 Agent 应用（模板见 `templates/nextjs-agent`）。
+Agent 应用保存业务请求和结果；SDK 对接接口；Combo 平台管理价格、订单、回调、到账与扣费。支付成功只说明平台已入账，应用仍须按自己的业务记录继续任务。
