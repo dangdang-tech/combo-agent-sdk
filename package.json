@@ -21,6 +21,7 @@
     "scripts/conformance.mjs",
     "PAYMENT_SDK_INTEGRATION.md",
     "AGENT.md",
+    "kits/payment-kit",
     "templates/nextjs-agent/.env.example",
     "templates/nextjs-agent/README.md",
     "templates/nextjs-agent/agent.yaml",
@@ -42,6 +43,7 @@
     "typecheck:test": "tsc -p tsconfig.vitest.json",
     "test": "vitest run",
     "verify:contract": "node scripts/verify-payment-contract.mjs",
+    "verify:payment-kit": "node scripts/verify-payment-kit.mjs",
     "doctor": "node scripts/doctor.mjs",
     "conformance": "node scripts/conformance.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"

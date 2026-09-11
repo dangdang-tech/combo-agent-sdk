@@ -1,0 +1,34 @@
+{
+  "$schema": "./catalog.schema.json",
+  "kitVersion": "1.0.0",
+  "status": "draft",
+  "catalogVersion": "example-2026-09-12-v1",
+  "creatorId": "example-creator",
+  "agentId": "example-consulting-agent",
+  "money": { "currency": "CNY", "minorUnitExponent": 2 },
+  "credits": { "unit": "service_credit", "displayName": "服务点", "scope": "creator_agent" },
+  "packages": [
+    {
+      "id": "example-starter",
+      "name": "入门体验包（虚构示例）",
+      "amountMinor": 1900,
+      "purchasedCredits": 100,
+      "bonusCredits": 10
+    }
+  ],
+  "services": [
+    { "id": "profile", "name": "免费建档", "creditsPerOperation": 0, "chargeUnit": "business_operation" },
+    { "id": "standard", "name": "标准咨询", "creditsPerOperation": 2, "chargeUnit": "business_operation" },
+    { "id": "advanced", "name": "高级咨询", "creditsPerOperation": 10, "chargeUnit": "business_operation" }
+  ],
+  "trial": { "ruleId": "example-onboarding-v1", "trigger": "onboarding_completed", "credits": 10, "grantLimitPerUser": 1 },
+  "policies": {
+    "consumptionOrder": "bonus_first",
+    "settlement": "successful_business_operation",
+    "unknownOutcome": "hold_and_reconcile",
+    "expiry": "undecided",
+    "refund": "undecided",
+    "collectionRoute": "undecided",
+    "paymentChannel": "undecided"
+  }
+}

@@ -21,6 +21,8 @@ SDK `0.1.1` 已提供支付客户端、身份接入、安全重试判断和业�
 
 SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operationId`、`callId`、`requestKey` 分别属于业务请求、收费调用和 Host 支付创建；OpenAPI 的 operationId 仅是代码生成方法名。正式 LLM 接口要求 operationId、callId 和当前请求的 userAssertion，禁止裸 userId、agentId 或 paymentToken。
 
+涉及创作者套餐、业务点数或收款设计时，另读 [Agent Payment Kit](kits/payment-kit/README.md)。它是离线商业设计与交接材料，没有提供新增线上 API；不得把配置草案或检查 PASS 当成已开通收费。
+
 ## 允许做的事
 
 - 验证 `x-combo-assertion`，只使用验签后的用户身份；
@@ -64,6 +66,7 @@ pnpm typecheck
 pnpm typecheck:test
 pnpm test
 pnpm verify:contract -- --upstream
+pnpm verify:payment-kit
 pnpm build
 pnpm prepack
 pnpm conformance

@@ -15,6 +15,7 @@
 | 付款后继续原任务，重复点击不重复执行 | 示例保存原请求和结果；已成功的任务返回保存结果。 | [业务如何继续](PAYMENT_SDK_INTEGRATION.md#业务如何继续) |
 | 模型明确失败且没扣钱时重试 | `0.1.1` 提供 `canRetrySameCall` 判断，应用据此让用户重试原任务。 | [错误处理表](PAYMENT_SDK_INTEGRATION.md#遇到问题时怎么处理) |
 | 检查安装包和接入配置 | 离线协议自检和配置诊断命令。 | [接入自检](PAYMENT_SDK_INTEGRATION.md#接入自检) |
+| 设计创作者的套餐、业务点数与收款流程 | ChatGua 模式的商业设计与配置交接包；对应平台商业能力仍待实现。 | [Agent Payment Kit](kits/payment-kit/README.md) |
 
 **第一次接入请读[支付使用手册](PAYMENT_SDK_INTEGRATION.md)**；想先运行代码，请看 [Next.js 示例](templates/nextjs-agent/README.md)；让编码 Agent 帮你接入，请同时提供 [AGENT.md](AGENT.md)。
 
@@ -102,6 +103,7 @@ pnpm typecheck
 pnpm typecheck:test
 pnpm test
 pnpm verify:contract -- --upstream
+pnpm verify:payment-kit
 pnpm build
 pnpm conformance
 pnpm prepack
@@ -113,6 +115,8 @@ pnpm --filter combo-reference-agent build
 
 ## 本期范围
 
-支持余额不足后的托管支付。主动充值、退款、订阅、创作者分账、税务、多币种、文件存储和发布 CLI 不在本期。
+SDK 运行时支持余额不足后的托管支付。主动充值、退款、订阅、创作者分账、税务、多币种、文件存储和发布 CLI 不在本期运行时范围。
+
+随包附带的 [Payment Kit](kits/payment-kit/README.md) 提供套餐、业务点数和创作者收款的设计合同、配置与验收清单，不代表这些新平台能力已实现；商业增量继续由 [Combo #357](https://github.com/dangdang-tech/Combo/issues/357) 跟踪。
 
 Agent 应用保存业务请求和结果；SDK 对接接口；Combo 平台管理价格、订单、回调、到账与扣费。支付成功只说明平台已入账，应用仍须按自己的业务记录继续任务。

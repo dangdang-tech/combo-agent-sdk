@@ -61,6 +61,9 @@ jobs:
       - name: Check test types
         run: npm run typecheck:test
 
+      - name: Validate payment kit draft catalog
+        run: npm run verify:payment-kit
+
       - name: Run unit tests
         run: npm test
 
@@ -95,6 +98,13 @@ jobs:
           const required = [
             'AGENT.md',
             'PAYMENT_SDK_INTEGRATION.md',
+            'kits/payment-kit/README.md',
+            'kits/payment-kit/chatgua-reference.md',
+            'kits/payment-kit/commercial-contract.md',
+            'kits/payment-kit/integration.md',
+            'kits/payment-kit/acceptance.md',
+            'kits/payment-kit/catalog.example.json',
+            'kits/payment-kit/catalog.schema.json',
             'dist/index.js',
             'dist/index.d.ts',
             'dist/payments.js',
