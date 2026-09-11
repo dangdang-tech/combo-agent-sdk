@@ -1,6 +1,8 @@
 # Payment SDK 编码 Agent 指南
 
-状态：`UNRELEASED / PARTIAL`。这份指南用于实现消费方 Agent 代码，不代表 Combo Payment API、Sandbox 或外部安全接入已经上线。
+先阅读 [README 能力入口](README.md)与[支付使用手册](PAYMENT_SDK_INTEGRATION.md)，再按本指南实现消费方代码。
+
+SDK `0.1.1` 已提供支付客户端、身份接入、安全重试判断和业务恢复示例；状态仍为 `UNRELEASED / PARTIAL`。既有测试与联调证据见 [README 版本记录](README.md#当前版本与完成情况)，不把未发布误解为支付能力尚未实现，也不把模块测试当成完整环境验收。
 
 ## 输入
 
@@ -14,6 +16,8 @@
 - Host 已实现当前用户会话和 `combo.payment_required` 消息处理的确认。
 
 缺少其中任何一项时，停止支付联调，不要自己猜接口或凭据。
+
+仅阅读使用手册、编写不联网的消费方代码或运行离线 conformance，不需要申请真实支付或用户登录凭据。源码安装使用 Node.js 24 和 pnpm `11.0.9`。
 
 SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operationId`、`callId`、`requestKey` 分别属于业务请求、收费调用和 Host 支付创建；OpenAPI 的 operationId 仅是代码生成方法名。正式 LLM 接口要求 operationId、callId 和当前请求的 userAssertion，禁止裸 userId、agentId 或 paymentToken。
 
@@ -50,6 +54,8 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 6. 创建结果不确定时使用原 `requestKey` 查询或重试。
 7. 支付完成后用新身份恢复；已完成任务直接返回保存结果。
 
+`createHostPaymentFlow()` 属于模板源码，并非 SDK 导出；Host 存储、登录会话、打开收银台和恢复回调均须由宿主实现。普通调用完整处理器在模板中，流式案例只展示 SDK 调用层；流式消费、结果持久化与终态判定必须由业务补齐，不能在收到流对象时就标记成功。
+
 ## 本仓验证命令
 
 ```bash
@@ -61,11 +67,12 @@ pnpm verify:contract -- --upstream
 pnpm build
 pnpm prepack
 pnpm conformance
-pnpm doctor
 pnpm --filter combo-reference-agent typecheck
 pnpm --filter combo-reference-agent build
 ```
 
-锁定 OpenAPI 的一致性检查已经可以在本仓运行；真实支付、Sandbox 和完整 Host 验证仍须等待 Combo 后端提供正式环境，不能用本地桩代替。
+锁定 OpenAPI 的一致性检查和离线自检可以直接运行。有平台提供的配置后，再按[手册的诊断命令](PAYMENT_SDK_INTEGRATION.md#接入自检)运行 doctor；缺少配置时失败属于预期。
+
+正式发布与独立接入者完整验收继续由 [Combo #308](https://github.com/dangdang-tech/Combo/issues/308) 跟踪。引用旧测试时保留对应 SHA 与 Mixed 边界；本次环境未运行的检查不得标记已通过。
 
 默认自检不联网。只有拿到受限配置并明确要求在线检查时才加 `doctor -- --online`；它只检查 Agent 身份，不调用模型或创建支付。任何自检 PASS 都必须同时保留 scope 与 Host NOT_RUN 等边界。
