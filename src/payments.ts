@@ -280,7 +280,7 @@ export class PaymentApiError extends Error {
   }
 }
 
-class PaymentResponseError extends PaymentApiError {
+export class PaymentResponseError extends PaymentApiError {
   readonly #failureKind: 'body_read' | 'body_format' | 'schema';
 
   constructor(
@@ -308,7 +308,7 @@ class PaymentResponseError extends PaymentApiError {
 }
 
 /** Created only after receiving and validating an actual HTTP error response. */
-class PaymentHttpError extends PaymentApiError {}
+export class PaymentHttpError extends PaymentApiError {}
 
 /**
  * 创建请求在收到响应前中断。服务端可能已经创建支付，调用方必须用原 requestKey 找回，
@@ -477,8 +477,12 @@ const PAYMENT_ACTION_URL_PATTERN =
 const PAYMENT_TIMESTAMP_PATTERN =
   /^((?!0000)\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,9}))?Z$/;
 
-export function createPaymentClient(options: PaymentClientOptions): PaymentClient {
-  const paymentUrl = parseHttpUrl(options.paymentUrl, 'paymentUrl').replace(/\/+$/, '');
+/** @internal Shared bounded transport; each protocol supplies its own strict parser. */
+export function createPaymentTransport<T>(
+  options: PaymentClientOptions,
+  parseSuccess: (payload: unknown, status: number) => T,
+  postStatuses: readonly number[] = [201],
+) {
   const auth = parsePaymentAuth(options.auth);
   const fetchImpl =
     options.fetchImpl ?? ((input: string, init?: RequestInit) => globalThis.fetch(input, init));
@@ -487,14 +491,12 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
     'requestTimeoutMs',
     MAX_REQUEST_TIMEOUT_MS,
   );
-  const collectionUrl = `${paymentUrl}/v1/payments`;
-
-  async function request(
+  return async function request(
     url: string,
     init: RequestInit,
     requestOptions: PaymentRequestOptions,
     createRequestKey?: string,
-  ): Promise<PaymentView> {
+  ): Promise<T> {
     if (requestOptions.signal?.aborted) {
       throw new PaymentApiError('aborted', 'payment request was aborted before it started', {
         status: 0,
@@ -599,20 +601,35 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
       if (!response.ok) {
         throw parseApiError(response.status, payload, response.headers.get('retry-after'));
       }
-      if (response.status !== 200 && !(init.method === 'POST' && response.status === 201)) {
+      if (
+        response.status !== 200 &&
+        !(init.method === 'POST' && postStatuses.includes(response.status))
+      ) {
         throw new PaymentResponseError(
           'schema',
           'payment API returned an unexpected success status',
           response.status,
         );
       }
-      return parseSuccessEnvelope(payload, response.status);
+      return parseSuccess(payload, response.status);
     } finally {
       controller.abort();
       clearTimeout(timer);
       requestOptions.signal?.removeEventListener('abort', onAbort);
     }
-  }
+  };
+}
+
+export function createPaymentClient(options: PaymentClientOptions): PaymentClient {
+  const paymentUrl = parseHttpUrl(options.paymentUrl, 'paymentUrl').replace(/\/+$/, '');
+  const defaultTimeoutMs = parseDuration(
+    options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    'requestTimeoutMs',
+    MAX_REQUEST_TIMEOUT_MS,
+  );
+  const collectionUrl = `${paymentUrl}/v1/payments`;
+
+  const request = createPaymentTransport(options, parseSuccessEnvelope);
 
   async function get(
     paymentRequestId: string,
@@ -740,7 +757,7 @@ export function createPaymentClient(options: PaymentClientOptions): PaymentClien
   };
 }
 
-function classifyCreateFailure(error: unknown, requestKey: string): unknown {
+export function classifyCreateFailure(error: unknown, requestKey: string): unknown {
   if (error instanceof PaymentResultUnknownError) return error;
   if (error instanceof PaymentResponseError && error.failureKind === 'body_read') {
     return new PaymentResultUnknownError(requestKey, 'response_interrupted', error, error.status);
@@ -935,7 +952,7 @@ function parsePaymentView(value: unknown): PaymentView {
   return Object.freeze({ ...common, status: 'closed' });
 }
 
-function parsePaymentAction(value: unknown): OpenUrlPaymentAction {
+export function parsePaymentAction(value: unknown): OpenUrlPaymentAction {
   const object = requireRecord(value, 'data.action');
   requireExactKeys(object, 'data.action', ['kind', 'url', 'expiresAt']);
   if (object.kind !== 'open_url') {
@@ -960,7 +977,7 @@ function parsePaymentStatus(value: unknown): PaymentStatus {
   throw invalidResponse('data.status is not a supported payment status');
 }
 
-function parseMoney(value: unknown, path: string): Money {
+export function parseMoney(value: unknown, path: string): Money {
   const object = requireRecord(value, path);
   requireExactKeys(object, path, ['currency', 'amountCents']);
   if (object.currency !== 'CNY') throw invalidResponse(`${path}.currency must be CNY`);
@@ -1056,7 +1073,7 @@ function parseRetryAfter(header: string | null | undefined): number | undefined 
   return undefined;
 }
 
-function parseMeta(value: unknown): { traceId: string } {
+export function parseMeta(value: unknown): { traceId: string } {
   const object = requireRecord(value, 'meta');
   requireExactKeys(object, 'meta', ['traceId']);
   return { traceId: parseTraceId(object.traceId, 'meta.traceId') };
@@ -1082,15 +1099,15 @@ function headersToRecord(headers: RequestInit['headers']): Record<string, string
   return Object.fromEntries(new Headers(headers).entries());
 }
 
-function parseIdentifier(value: unknown, path: string): string {
+export function parseIdentifier(value: unknown, path: string): string {
   return requireAsciiIdentifier(value, path, 1, 'invalid_request');
 }
 
-function parseRequestKey(value: unknown): string {
+export function parseRequestKey(value: unknown): string {
   return requireAsciiIdentifier(value, 'requestKey', 8, 'invalid_request');
 }
 
-function parseOpaqueToken(value: unknown, path: string): string {
+export function parseOpaqueToken(value: unknown, path: string): string {
   if (
     typeof value !== 'string' ||
     value.length < 16 ||
@@ -1118,7 +1135,7 @@ function parseAccessToken(value: unknown): string {
   return value;
 }
 
-function parseHttpUrl(value: unknown, path: string): string {
+export function parseHttpUrl(value: unknown, path: string): string {
   if (
     typeof value !== 'string' ||
     value.length < 1 ||
@@ -1181,7 +1198,7 @@ function parseResponseHttpUrl(value: unknown, path: string): string {
 
 type PaymentTimestampParts = readonly [number, number, number, number, number, number, number];
 
-function parseTimestamp(value: unknown, path: string): string {
+export function parseTimestamp(value: unknown, path: string): string {
   const text = requireString(value, path, 1, 64);
   if (!parseTimestampParts(text)) {
     throw invalidResponse(`${path} must be a real UTC RFC 3339 timestamp`);
@@ -1217,7 +1234,7 @@ function parseTimestampParts(text: string): PaymentTimestampParts | null {
   return [year, month, day, hour, minute, second, nanoseconds];
 }
 
-function compareTimestamps(left: string, right: string): -1 | 0 | 1 {
+export function compareTimestamps(left: string, right: string): -1 | 0 | 1 {
   const leftParts = parseTimestampParts(left);
   const rightParts = parseTimestampParts(right);
   if (!leftParts || !rightParts) throw invalidResponse('payment timestamp comparison failed');
@@ -1233,7 +1250,7 @@ function optionalTimestamp(value: unknown, path: string): string | undefined {
   return value === undefined ? undefined : parseTimestamp(value, path);
 }
 
-function parseDuration(value: unknown, path: string, maximum: number): number {
+export function parseDuration(value: unknown, path: string, maximum: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > maximum) {
     throw new PaymentApiError(
       'invalid_request',
@@ -1264,7 +1281,7 @@ function requireAsciiIdentifier(
   return value;
 }
 
-function parseResponseIdentifier(value: unknown, path: string, minimum: number): string {
+export function parseResponseIdentifier(value: unknown, path: string, minimum: number): string {
   if (
     typeof value !== 'string' ||
     value.length < minimum ||
@@ -1334,12 +1351,12 @@ function requireString(value: unknown, path: string, minimum: number, maximum: n
   return value;
 }
 
-function requireRecord(value: unknown, path: string): Record<string, unknown> {
+export function requireRecord(value: unknown, path: string): Record<string, unknown> {
   if (!isRecord(value)) throw invalidResponse(`${path} must be an object`);
   return value;
 }
 
-function requireExactKeys(
+export function requireExactKeys(
   object: Record<string, unknown>,
   path: string,
   required: readonly string[],
@@ -1358,7 +1375,7 @@ function requireExactKeys(
   }
 }
 
-function requireExactInputKeys(
+export function requireExactInputKeys(
   object: Record<string, unknown>,
   path: string,
   allowedKeys: readonly string[],
@@ -1376,25 +1393,25 @@ function requireExactInputKeys(
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function invalidResponse(message: string): PaymentApiError {
+export function invalidResponse(message: string): PaymentApiError {
   return new PaymentApiError('invalid_response', message, {
     status: 0,
     retryable: false,
   });
 }
 
-function invalidRequest(message: string): PaymentApiError {
+export function invalidRequest(message: string): PaymentApiError {
   return new PaymentApiError('invalid_request', message, {
     status: 0,
     retryable: false,
   });
 }
 
-async function abortableSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
+export async function abortableSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
     throw new PaymentApiError('aborted', 'payment wait was aborted', {
       status: 0,

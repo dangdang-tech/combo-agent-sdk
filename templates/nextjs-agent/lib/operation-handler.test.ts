@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentAccessError, LlmGatewayError, PaymentRequiredError } from 'combo-agent-sdk';
+import {
+  AgentAccessError,
+  LlmGatewayError,
+  PaymentRequiredError,
+  createRecoverablePaymentClient,
+} from 'combo-agent-sdk';
+import {
+  createRecoverableHostPaymentFlow,
+  type RecoverableHostPayment,
+} from './recoverable-host-payment';
 import { MemoryOperationStore } from './operation-store';
 
 const mocks = vi.hoisted(() => ({
@@ -83,6 +92,116 @@ describe('business-owned operation recovery', () => {
     expect(
       await (mocks.store as MemoryOperationStore).get('user-1', operationId),
     ).not.toHaveProperty('userAssertion');
+  });
+
+  it('completes the same business once after an explicit checkout recovery and repeated resumes', async () => {
+    mocks.llm
+      .mockRejectedValueOnce(
+        new PaymentRequiredError(
+          {
+            id: 'payreq-1',
+            paymentToken: 'test-payment-token-value',
+            amount: { currency: 'CNY', amountCents: '600' },
+            expiresAt: '2099-09-03T10:05:00Z',
+          },
+          'trace-1',
+        ),
+      )
+      .mockResolvedValue({ answer: 'paid after recovery' });
+    const required = await handleNewOperation(request());
+    let saved: RecoverableHostPayment | null = null;
+    let recoveryAccepted = false;
+    let recovered = false;
+    let paid = false;
+    const requests: Array<{ url: string; method: string }> = [];
+    const payments = createRecoverablePaymentClient({
+      paymentUrl: 'https://billing.test',
+      auth: { kind: 'browser-session' },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, method: init?.method ?? 'GET' });
+        if (url.includes('/by-request-key/'))
+          return Response.json(
+            {
+              error: {
+                userMessage: '尚未创建',
+                action: 'none',
+                retriable: false,
+                traceId: 'trace-1',
+              },
+            },
+            { status: 404 },
+          );
+        if (url.endsWith('/recover')) recoveryAccepted = true;
+        return Response.json(
+          {
+            data: {
+              version: 2,
+              paymentRequestId: 'payreq-1',
+              status: paid ? 'completed' : 'unpaid',
+              amount: { currency: 'CNY', amountCents: '600' },
+              createdAt: '2099-09-03T10:00:00Z',
+              updatedAt: '2099-09-03T10:01:00Z',
+              recoverableUntil: '2099-09-04T10:00:00Z',
+              checkout: {
+                attemptId: recovered
+                  ? '22222222-2222-4222-8222-222222222222'
+                  : '11111111-1111-4111-8111-111111111111',
+                status: paid
+                  ? 'paid'
+                  : recovered
+                    ? 'ready'
+                    : recoveryAccepted
+                      ? 'closing'
+                      : 'missing_qr',
+                canRecover: !recoveryAccepted,
+                ...(recovered ? { expiresAt: '2099-09-03T10:20:00Z' } : {}),
+              },
+            },
+            meta: { traceId: 'trace-1' },
+          },
+          { status: url.endsWith('/recover') ? 202 : 200 },
+        );
+      },
+    });
+    const flow = createRecoverableHostPaymentFlow({
+      payments,
+      store: {
+        runExclusive: async (_user, _op, work) => work(),
+        get: async () => saved,
+        save: async (value) => {
+          saved = structuredClone(value);
+        },
+      },
+      currentUserId: async () => 'user-1',
+      newRequestKey: () => 'original-request-key',
+      newRecoveryKey: () => 'original-recovery-key',
+      openCheckout: async () => {},
+      resumeWithFreshIdentity: (id) =>
+        handleResumeOperation(request(input, 'fresh.after.payment'), id),
+    });
+    await flow.start(operationId, await required.json());
+    expect(
+      (await flow.recover(operationId, '11111111-1111-4111-8111-111111111111')).checkout.status,
+    ).toBe('closing');
+    expect((await flow.check(operationId)).checkout.status).toBe('closing');
+    recovered = true;
+    expect((await flow.check(operationId)).checkout.status).toBe('ready');
+    paid = true;
+    const results = await Promise.all([flow.resume(operationId), flow.resume(operationId)]);
+    expect(results.every((result) => result instanceof Response && result.status === 200)).toBe(
+      true,
+    );
+    // One initial 402 and one successful execution; business store owns execution idempotence.
+    expect(mocks.llm).toHaveBeenCalledTimes(2);
+    expect(mocks.llm.mock.calls[1]?.[0]).toMatchObject({
+      callId: mocks.llm.mock.calls[0]?.[0].callId,
+      operationId,
+      userAssertion: 'fresh.after.payment',
+    });
+    expect(requests.filter(({ url }) => url.endsWith('/recover'))).toHaveLength(1);
+    expect(
+      requests.filter(({ url, method }) => url.endsWith('/v2/payments') && method === 'POST'),
+    ).toHaveLength(1);
   });
 
   it('keeps the same IDs retryable when obtaining Agent identity fails before dispatch', async () => {

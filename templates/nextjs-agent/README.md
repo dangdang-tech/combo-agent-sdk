@@ -2,7 +2,7 @@
 
 这是一个可以安装、构建和启动的 Next.js 服务端示例，演示“用户提交任务，余额不足时付款，到账后继续原任务”。已有应用接入方式和流式调用案例见[支付使用手册](../../PAYMENT_SDK_INTEGRATION.md)。
 
-当前随 SDK `0.1.1` 提供，状态为 `UNRELEASED / PARTIAL`。实现版本、既有联调证据和仍需完成的验收见 [README](../../README.md#当前版本与完成情况)。你的运行环境仍需平台提供身份配置和 Host 接入。
+当前随 SDK `0.2.0` 提供，状态为 `UNRELEASED / PARTIAL`。实现版本、既有联调证据和仍需完成的验收见 [README](../../README.md#当前版本与完成情况)。你的运行环境仍需平台提供身份配置和 Host 接入。
 
 - 业务保存 `operationId`、原始请求、稳定 `callId`、状态和结果。
 - SDK 识别标准 402，但不保存业务数据，也不自动恢复任务。
@@ -117,6 +117,10 @@ await payAndResume(savedOperationId, agentPaymentMessage, {
 Host 存储必须在 POST 前保存 requestKey；重新调用时仍使用同一编号。创建结果不确定时先查询原编号，没有查到就保留尝试状态，供用户稍后重试。只打开 Combo 返回的地址，等待平台确认 completed 后才恢复业务；当前用户发生变化时停止。
 
 ## 持久化边界
+
+v2 恢复使用独立的 `lib/recoverable-host-payment.ts`，装配见[付款码恢复手册](../../PAYMENT_RECOVERY.md)。它提供 start/check/recover/open/resume；只有 recover 对旧付款尝试显式发起恢复。Host 须实现耐久存储和串行锁，页面刷新与结果未知只执行 check。Agent 的 402、operationId/callId、业务存储与 resume 路由保持不变。
+
+`operation-handler.test.ts` 包含 v2 SDK、Host 和实际业务处理器的受控联测，验证切换渠道尝试后重复 resume 只成功执行一次；渠道和模型是测试替身，不代表该能力已部署。V2 合同已绑定平台 PR #368 的实际合并提交，具体来源见 SDK 合同锁。旧 `lib/host-payment.ts` 的 v1 行为保持兼容。
 
 [`lib/operation-store.ts`](lib/operation-store.ts) 定义了业务必须实现的 `OperationStore`。为了让示例开箱运行，仓库附带内存实现；它在进程重启后会清空，不能直接用于生产。
 

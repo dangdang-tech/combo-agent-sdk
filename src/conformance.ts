@@ -1,5 +1,9 @@
 import { createLlmClient, LlmGatewayError } from './llm.js';
 import {
+  createRecoverablePaymentClient,
+  PaymentRecoveryResultUnknownError,
+} from './recoverable-payments.js';
+import {
   createPaymentClient,
   createPaymentHostMessage,
   parsePaymentHostMessage,
@@ -184,6 +188,56 @@ export async function runPaymentClientConformance(): Promise<ConformanceReport> 
   await retryClient.chatCompletion(input);
   assert(requests[0] === requests[1], 'retry changed the original business request');
   checks.push('confirmed_failure_same_call_retry');
+  const recoveryInput = {
+    recoveryKey: 'conformance-recovery-key',
+    expectedAttemptId: '11111111-1111-4111-8111-111111111111',
+  };
+  const recoveryView = {
+    version: 2,
+    paymentRequestId: waiting.paymentRequestId,
+    status: 'unpaid',
+    amount: waiting.amount,
+    createdAt: waiting.createdAt,
+    updatedAt: waiting.updatedAt,
+    recoverableUntil: '2099-01-02T00:00:00Z',
+    checkout: {
+      attemptId: recoveryInput.expectedAttemptId,
+      status: 'missing_qr',
+      canRecover: true,
+    },
+  };
+  let recoveryWrites = 0;
+  const recoveryClient = createRecoverablePaymentClient({
+    paymentUrl: 'https://unused.invalid',
+    auth: { kind: 'browser-session' },
+    fetchImpl: async (url, init) => {
+      assert(url.includes('/v2/payments/'), 'recovery used a legacy endpoint');
+      if (init?.method === 'POST') {
+        recoveryWrites++;
+        assert(
+          JSON.stringify(JSON.parse(String(init.body))) === JSON.stringify(recoveryInput),
+          'recovery intent changed',
+        );
+        throw new Error('simulated recovery response loss');
+      }
+      return Response.json({ data: recoveryView, meta: { traceId: 'conformance-recovery' } });
+    },
+  });
+  const recoveryError = await recoveryClient
+    .recover(waiting.paymentRequestId, recoveryInput)
+    .catch((error: unknown) => error);
+  assert(
+    recoveryError instanceof PaymentRecoveryResultUnknownError,
+    'lost recovery was not classified as unknown',
+  );
+  assert(recoveryError.recoveryKey === recoveryInput.recoveryKey, 'lost recovery lost its key');
+  assert(
+    (await recoveryClient.get(waiting.paymentRequestId)).checkout.canRecover,
+    'v2 checkout state was not retained',
+  );
+  assert(recoveryWrites === 1, 'recovery GET automatically submitted another write');
+  checks.push('v2_explicit_recovery_retains_key');
+  checks.push('v2_recovery_read_never_writes');
   return {
     result: 'PASS',
     scope: 'offline_client_contract_only',

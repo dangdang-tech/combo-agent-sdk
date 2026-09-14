@@ -66,3 +66,15 @@ export {
   type PaymentView,
   type WaitForPaymentOptions,
 } from './payments.js';
+export {
+  createRecoverablePaymentClient,
+  PaymentRecoveryResultUnknownError,
+  RecoverablePaymentClosedError,
+  RecoverablePaymentWaitTimeoutError,
+  type CheckoutAttemptStatus,
+  type RecoverableCheckout,
+  type RecoverablePaymentClient,
+  type RecoverablePaymentClientOptions,
+  type RecoverablePaymentView,
+  type RecoverPaymentInput,
+} from './recoverable-payments.js';
