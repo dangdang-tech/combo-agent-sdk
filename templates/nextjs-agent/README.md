@@ -120,7 +120,7 @@ Host 存储必须在 POST 前保存 requestKey；重新调用时仍使用同一�
 
 v2 恢复使用独立的 `lib/recoverable-host-payment.ts`，装配见[付款码恢复手册](../../PAYMENT_RECOVERY.md)。它提供 start/check/recover/open/resume；只有 recover 对旧付款尝试显式发起恢复。Host 须实现耐久存储和串行锁，页面刷新与结果未知只执行 check。Agent 的 402、operationId/callId、业务存储与 resume 路由保持不变。
 
-`operation-handler.test.ts` 包含 v2 SDK、Host 和实际业务处理器的受控联测，验证切换渠道尝试后重复 resume 只成功执行一次；渠道和模型是测试替身，不代表该候选能力已部署。旧 `lib/host-payment.ts` 的 v1 行为保持兼容。
+`operation-handler.test.ts` 包含 v2 SDK、Host 和实际业务处理器的受控联测，验证切换渠道尝试后重复 resume 只成功执行一次；渠道和模型是测试替身，不代表该能力已部署。V2 合同已绑定平台 PR #368 的实际合并提交，具体来源见 SDK 合同锁。旧 `lib/host-payment.ts` 的 v1 行为保持兼容。
 
 [`lib/operation-store.ts`](lib/operation-store.ts) 定义了业务必须实现的 `OperationStore`。为了让示例开箱运行，仓库附带内存实现；它在进程重启后会清空，不能直接用于生产。
 

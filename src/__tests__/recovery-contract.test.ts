@@ -11,7 +11,7 @@ import {
 const bytes = readFileSync(new URL('../../contracts/payment-v2.openapi.json', import.meta.url));
 const source = JSON.parse(
   readFileSync(
-    new URL('../../contracts/payment-recovery-contract.candidate.json', import.meta.url),
+    new URL('../../contracts/payment-recovery-contract.lock.json', import.meta.url),
     'utf8',
   ),
 ) as {
@@ -19,8 +19,6 @@ const source = JSON.parse(
   commit: string;
   path: string;
   sha256: string;
-  status: string;
-  requiresMergedSource: boolean;
 };
 const document = JSON.parse(bytes.toString('utf8')) as {
   components: { schemas: Record<string, object> };
@@ -43,13 +41,12 @@ const base = {
 };
 const wire = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
-describe('candidate v2 contract parity', () => {
-  it('pins exact platform candidate bytes while keeping the source explicitly unreleased', () => {
+describe('merged v2 contract parity', () => {
+  it('pins exact protocol bytes from the merged platform source', () => {
     expect(source.repository).toBe('dangdang-tech/Combo');
-    expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(source.commit).toBe('b3bf928c02d04ab3d042bdf3724da4deeec34e74');
     expect(source.path).toBe('packages/payment-protocol/openapi/payment-v2.openapi.json');
-    expect(source.status).toBe('UNRELEASED');
-    expect(source.requiresMergedSource).toBe(true);
+    expect(Object.keys(source).sort()).toEqual(['commit', 'path', 'repository', 'sha256']);
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(source.sha256);
     expect(Object.keys(document.paths).sort()).toEqual(
       [

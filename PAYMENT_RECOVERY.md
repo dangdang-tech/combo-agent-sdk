@@ -8,7 +8,7 @@ SDK `0.2.0` 增加显式选择的 v2 客户端和 Host 协调示例，状态为 
 
 平台须提供已开启 v2 的 Billing 地址、允许的 Host Origin 和当前用户会话。Agent 的模型令牌不能代替 Host 会话。收银台与 Billing 不同源时，由平台确认受信收银台 origin，并写入 Host 的可信配置；不能从 Agent 消息中获得这个列表。
 
-使用当前 SDK PR 的源码或交付工件前，核对完整源码 SHA、工件 SHA-256 和 `contracts/payment-recovery-contract.candidate.json`。v2 候选合同必须在对应平台改动合并后重新绑定已合并来源，再用于正式发布；v1 的既有锁不受影响。
+使用锁定 SDK 源码或交付工件前，核对完整源码 SHA、工件 SHA-256 和 `contracts/payment-recovery-contract.lock.json`。V2 合同来自已合入的 [Combo PR #368](https://github.com/dangdang-tech/Combo/pull/368)，来源提交为 `b3bf928c02d04ab3d042bdf3724da4deeec34e74`，OpenAPI SHA-256 为 `edbddfe56cf75e4acdb108a6a0f7a5bc1b0a1709ae0744f4248a5ab3e616b7c2`；v1 既有锁不变。合同合入不等于 SDK 正式发布、平台已部署或真实支付验收完成。
 
 生产 Host 自行实现耐久存储及跨标签页、跨实例的串行锁。示例不持久化原业务输入，业务仍由原来的 `OperationStore` 保存。同一恢复过程保持原 `operationId`、`callId`、`requestKey` 和 `paymentRequestId`；渠道每次使用新尝试编号由 Billing 负责，SDK 不构造渠道流水或金额。
 

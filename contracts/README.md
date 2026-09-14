@@ -12,10 +12,10 @@
 
 这些检查证明 SDK 和锁定协议一致，真实支付、正式身份与 Host 端到端验收仍需平台环境。
 
-## v2 恢复协议候选
+## v2 恢复协议来源
 
-本次跨仓 PR 为 `0.2.0` 私有预发布附带 `payment-v2.openapi.json` 候选快照。它的来源单独记录在 `payment-recovery-contract.candidate.json`，固定平台候选提交和 SHA-256，明确标记 `UNRELEASED` 与 `requiresMergedSource: true`；它不是已合并合同锁，不覆盖 v1 文件或既有锁。
+`payment-v2.openapi.json` 是已合入的 [Combo PR #368](https://github.com/dangdang-tech/Combo/pull/368) 的逐字节副本。`payment-recovery-contract.lock.json` 绑定实际合并提交 `b3bf928c02d04ab3d042bdf3724da4deeec34e74` 与 SHA-256 `edbddfe56cf75e4acdb108a6a0f7a5bc1b0a1709ae0744f4248a5ab3e616b7c2`，不覆盖 v1 文件或既有锁。
 
-候选仅用于相互依赖的 Draft PR 评审、离线合同测试和受控联调。平台改动合并后，必须重新绑定已合并的精确来源提交，再进入 SDK 正式发布。当前校验脚本拒绝在 `private !== true` 的包中使用该候选，不能直接删除 private 发布。
+此前跨仓评审使用的候选来源已被该正式来源锁替换；协议内容与候选快照一致。SDK 仍是 `0.2.0` 私有预发布，合同合入不等于部署、正式版本发布或真实支付验收。
 
-`verify:contract -- --upstream` 对两份快照分别核对其记录的来源字节；它证明来源一致，不证明候选已合并或部署。v2 双向测试区分 JSON Schema 的结构规则、SDK 的跨字段时间规则和 Host 额外的可信来源配置。
+`verify:contract -- --upstream` 对两份快照分别核对其锁定提交的来源字节；它证明来源一致，不证明已部署。v2 双向测试区分 JSON Schema 的结构规则、SDK 的跨字段时间规则和 Host 额外的可信来源配置。

@@ -1,8 +1,6 @@
 {
-  "status": "UNRELEASED",
-  "requiresMergedSource": true,
   "repository": "dangdang-tech/Combo",
-  "commit": "93b794d76d66b832cb6faf2c89f0b88d724013f7",
+  "commit": "b3bf928c02d04ab3d042bdf3724da4deeec34e74",
   "path": "packages/payment-protocol/openapi/payment-v2.openapi.json",
   "sha256": "edbddfe56cf75e4acdb108a6a0f7a5bc1b0a1709ae0744f4248a5ab3e616b7c2"
 }

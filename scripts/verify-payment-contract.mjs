@@ -3,11 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const upstream = process.argv.includes('--upstream');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-if (packageInfo.private !== true)
-  throw new Error('candidate recovery contract must not be used by a publishable package');
-
-async function verify(name, lockName, sourcePath, candidate = false) {
+async function verify(name, lockName, sourcePath) {
   const lock = JSON.parse(
     await readFile(new URL(`../contracts/${lockName}`, import.meta.url), 'utf8'),
   );
@@ -15,8 +11,7 @@ async function verify(name, lockName, sourcePath, candidate = false) {
     lock.repository !== 'dangdang-tech/Combo' ||
     !/^[0-9a-f]{40}$/.test(lock.commit) ||
     lock.path !== sourcePath ||
-    !/^[0-9a-f]{64}$/.test(lock.sha256) ||
-    (candidate && (lock.status !== 'UNRELEASED' || lock.requiresMergedSource !== true))
+    !/^[0-9a-f]{64}$/.test(lock.sha256)
   )
     throw new Error(`invalid ${name} contract source`);
   const bytes = await readFile(new URL(`../contracts/${name}`, import.meta.url));
@@ -61,14 +56,13 @@ const legacy = await verify(
 );
 const recovery = await verify(
   'payment-v2.openapi.json',
-  'payment-recovery-contract.candidate.json',
+  'payment-recovery-contract.lock.json',
   'packages/payment-protocol/openapi/payment-v2.openapi.json',
-  true,
 );
 console.log(
   JSON.stringify({
     result: 'PASS',
     ...legacy,
-    recoveryContract: { ...recovery, status: 'UNRELEASED', requiresMergedSource: true },
+    recoveryContract: recovery,
   }),
 );
