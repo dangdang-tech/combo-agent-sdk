@@ -14,6 +14,7 @@ try {
     JSON.stringify({
       ...(await runPaymentClientConformance()),
       openapiSha256: contract.openapiSha256,
+      recoveryContract: contract.recoveryContract,
     }),
   );
 } catch {
