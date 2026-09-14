@@ -76,3 +76,11 @@ pnpm --filter combo-reference-agent build
 正式发布与独立接入者完整验收继续由 [Combo #308](https://github.com/dangdang-tech/Combo/issues/308) 跟踪。引用旧测试时保留对应 SHA 与 Mixed 边界；本次环境未运行的检查不得标记已通过。
 
 默认自检不联网。只有拿到受限配置并明确要求在线检查时才加 `doctor -- --online`；它只检查 Agent 身份，不调用模型或创建支付。任何自检 PASS 都必须同时保留 scope 与 Host NOT_RUN 等边界。
+
+## 可恢复收银台（0.2.0 候选）
+
+需要恢复缺失或过期付款码时，先读 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md)，显式选择 `createRecoverablePaymentClient()`；不要把 v2 状态塞给 v1 客户端。v1 合同锁与三字段 Host 交接仍保持原样。v2 候选合同及平台依赖必须核对，未部署前只运行受控测试。
+
+恢复由 Host 当前会话授权，只有用户明确点击恢复才调用 recover。POST 前持久化 recoveryKey 和 expectedAttemptId，结果未知时只查询原支付并保留原 key；不要换新 key、callId、operationId 或自行决定渠道关单。以服务端 canRecover 决定按钮，以逻辑 completed 决定业务续接，不能把 checkout.closed 当作整个支付结束。
+
+模板 `createRecoverableHostPaymentFlow()` 定义 start/check/recover/open/resume 独立动作和耐久存储接口。业务继续使用原有 OperationStore 与 resume 接口，当前用户变化时停止操作。

@@ -167,6 +167,8 @@ export async function openSavedStream(request: Request, saved: OperationRecord) 
 
 ## 付款并继续
 
+以下示例保持 v1 兼容。SDK `0.2.0` 新增的可恢复收银台是独立选择的 v2 接口，请看[付款码恢复手册](PAYMENT_RECOVERY.md)；不要将两种状态合同混用。
+
 这段代码运行在 **Host 浏览器应用**，不在 Agent 服务端代办支付。先把模板的 [host-payment.ts](templates/nextjs-agent/lib/host-payment.ts) 复制到 Host 的 `lib/host-payment.ts`，再添加下例 `lib/payment-flow.ts`。`createHostPaymentFlow` 是模板函数，不是 SDK 导出。
 
 ```ts
