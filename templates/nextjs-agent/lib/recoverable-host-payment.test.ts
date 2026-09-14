@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   PaymentRecoveryResultUnknownError,
+  PaymentResultUnknownError,
   type RecoverablePaymentClient,
   type RecoverablePaymentView,
 } from 'combo-agent-sdk';
@@ -115,6 +116,25 @@ describe('explicit Host checkout recovery', () => {
     test.payments.get.mockResolvedValue(completed);
     await test.flow.resume('operation-1');
     expect(test.deps.resumeWithFreshIdentity).toHaveBeenCalledWith('operation-1');
+  });
+
+  it('finds an uncertain initial creation on refresh without another POST', async () => {
+    const test = setup();
+    test.payments.create.mockRejectedValue(
+      new PaymentResultUnknownError('request-key-original', 'network_error'),
+    );
+    await expect(test.flow.start('operation-1', message)).rejects.toBeInstanceOf(
+      PaymentResultUnknownError,
+    );
+    expect(test.saved()?.paymentRequestId).toBeUndefined();
+    test.payments.findByRequestKey.mockResolvedValue(missing);
+    expect((await test.flow.check('operation-1')).paymentRequestId).toBe('payreq-1');
+    expect(test.saved()?.paymentRequestId).toBe('payreq-1');
+    expect(test.payments.create).toHaveBeenCalledTimes(1);
+    expect(test.deps.newRequestKey).toHaveBeenCalledTimes(1);
+    expect(
+      test.payments.findByRequestKey.mock.calls.every(([key]) => key === 'request-key-original'),
+    ).toBe(true);
   });
 
   it('retains an uncertain recovery key across refresh, restart, and an explicit retry', async () => {

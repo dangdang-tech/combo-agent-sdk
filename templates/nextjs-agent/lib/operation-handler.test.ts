@@ -110,6 +110,7 @@ describe('business-owned operation recovery', () => {
       .mockResolvedValue({ answer: 'paid after recovery' });
     const required = await handleNewOperation(request());
     let saved: RecoverableHostPayment | null = null;
+    let recoveryAccepted = false;
     let recovered = false;
     let paid = false;
     const requests: Array<{ url: string; method: string }> = [];
@@ -130,27 +131,36 @@ describe('business-owned operation recovery', () => {
             },
             { status: 404 },
           );
-        if (url.endsWith('/recover')) recovered = true;
-        return Response.json({
-          data: {
-            version: 2,
-            paymentRequestId: 'payreq-1',
-            status: paid ? 'completed' : 'unpaid',
-            amount: { currency: 'CNY', amountCents: '600' },
-            createdAt: '2099-09-03T10:00:00Z',
-            updatedAt: '2099-09-03T10:01:00Z',
-            recoverableUntil: '2099-09-04T10:00:00Z',
-            checkout: {
-              attemptId: recovered
-                ? '22222222-2222-4222-8222-222222222222'
-                : '11111111-1111-4111-8111-111111111111',
-              status: paid ? 'paid' : recovered ? 'ready' : 'missing_qr',
-              canRecover: !recovered,
-              ...(recovered ? { expiresAt: '2099-09-03T10:20:00Z' } : {}),
+        if (url.endsWith('/recover')) recoveryAccepted = true;
+        return Response.json(
+          {
+            data: {
+              version: 2,
+              paymentRequestId: 'payreq-1',
+              status: paid ? 'completed' : 'unpaid',
+              amount: { currency: 'CNY', amountCents: '600' },
+              createdAt: '2099-09-03T10:00:00Z',
+              updatedAt: '2099-09-03T10:01:00Z',
+              recoverableUntil: '2099-09-04T10:00:00Z',
+              checkout: {
+                attemptId: recovered
+                  ? '22222222-2222-4222-8222-222222222222'
+                  : '11111111-1111-4111-8111-111111111111',
+                status: paid
+                  ? 'paid'
+                  : recovered
+                    ? 'ready'
+                    : recoveryAccepted
+                      ? 'closing'
+                      : 'missing_qr',
+                canRecover: !recoveryAccepted,
+                ...(recovered ? { expiresAt: '2099-09-03T10:20:00Z' } : {}),
+              },
             },
+            meta: { traceId: 'trace-1' },
           },
-          meta: { traceId: 'trace-1' },
-        });
+          { status: url.endsWith('/recover') ? 202 : 200 },
+        );
       },
     });
     const flow = createRecoverableHostPaymentFlow({
@@ -170,7 +180,12 @@ describe('business-owned operation recovery', () => {
         handleResumeOperation(request(input, 'fresh.after.payment'), id),
     });
     await flow.start(operationId, await required.json());
-    await flow.recover(operationId, '11111111-1111-4111-8111-111111111111');
+    expect(
+      (await flow.recover(operationId, '11111111-1111-4111-8111-111111111111')).checkout.status,
+    ).toBe('closing');
+    expect((await flow.check(operationId)).checkout.status).toBe('closing');
+    recovered = true;
+    expect((await flow.check(operationId)).checkout.status).toBe('ready');
     paid = true;
     const results = await Promise.all([flow.resume(operationId), flow.resume(operationId)]);
     expect(results.every((result) => result instanceof Response && result.status === 200)).toBe(

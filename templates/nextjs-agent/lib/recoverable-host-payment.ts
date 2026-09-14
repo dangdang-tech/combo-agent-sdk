@@ -73,11 +73,23 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
     });
   }
 
-  const load = async (saved: RecoverableHostPayment | null, options: PaymentRequestOptions) => {
-    if (!saved?.paymentRequestId) throw new Error('payment creation must be resolved first');
-    const view = await deps.payments.get(saved.paymentRequestId, options);
-    if (view.paymentRequestId !== saved.paymentRequestId)
+  const load = async (
+    saved: RecoverableHostPayment | null,
+    options: PaymentRequestOptions,
+    assertCurrentUser: () => Promise<void>,
+  ) => {
+    if (!saved) throw new Error('no payment intent has been saved');
+    const view = saved.paymentRequestId
+      ? await deps.payments.get(saved.paymentRequestId, options)
+      : await deps.payments.findByRequestKey(saved.requestKey, options);
+    if (!view)
+      throw new Error('payment creation is not yet visible; retain the original requestKey');
+    if (saved.paymentRequestId && view.paymentRequestId !== saved.paymentRequestId)
       throw new Error('payment identity changed');
+    if (!saved.paymentRequestId) {
+      saved.paymentRequestId = view.paymentRequestId;
+      await deps.store.save(saved);
+    }
     return view;
   };
 
@@ -98,7 +110,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
           await deps.store.save(saved);
         }
         let view = saved.paymentRequestId
-          ? await load(saved, options)
+          ? await load(saved, options, assertCurrentUser)
           : await deps.payments.findByRequestKey(saved.requestKey, options);
         await assertCurrentUser();
         if (!view) {
@@ -123,7 +135,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
     /** Refresh/reopen after an ambiguous recovery only reads the original logical payment. */
     check(operationId: string, options: PaymentRequestOptions = {}) {
       return withPayment(operationId, options, async (saved, assertCurrentUser) => {
-        const view = await load(saved, options);
+        const view = await load(saved, options, assertCurrentUser);
         await assertCurrentUser();
         return view;
       });
@@ -132,7 +144,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
     /** Call only from the user's explicit retry button, passing the attempt shown on that page. */
     recover(operationId: string, expectedAttemptId: string, options: PaymentRequestOptions = {}) {
       return withPayment(operationId, options, async (saved, assertCurrentUser) => {
-        const view = await load(saved, options);
+        const view = await load(saved, options, assertCurrentUser);
         await assertCurrentUser();
         if (view.status !== 'unpaid' || view.checkout.attemptId !== expectedAttemptId) return view; // A stale page cannot close a newer attempt or reopen a terminal payment.
         const previous = saved!.recovery;
@@ -165,7 +177,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
           // Save before any lookup. No new key and no automatic recovery POST after a lost result.
           await deps.store.save({ ...current, recovery: { ...recovery, outcome: 'unknown' } });
           await assertCurrentUser();
-          const observed = await load(current, options);
+          const observed = await load(current, options, assertCurrentUser);
           await assertCurrentUser();
           return observed;
         }
@@ -174,7 +186,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
 
     open(operationId: string, options: PaymentRequestOptions = {}) {
       return withPayment(operationId, options, async (saved, assertCurrentUser) => {
-        const view = await load(saved, options);
+        const view = await load(saved, options, assertCurrentUser);
         await assertCurrentUser();
         if (
           view.status !== 'unpaid' ||
@@ -190,7 +202,7 @@ export function createRecoverableHostPaymentFlow(deps: RecoverableHostPaymentDep
     /** Only authoritative completed can resume business; QR/channel status alone is insufficient. */
     resume(operationId: string, options: PaymentRequestOptions = {}) {
       return withPayment(operationId, options, async (saved, assertCurrentUser) => {
-        const view = await load(saved, options);
+        const view = await load(saved, options, assertCurrentUser);
         await assertCurrentUser();
         if (view.status !== 'completed') throw new Error('payment is not completed');
         return deps.resumeWithFreshIdentity(operationId);
