@@ -12,6 +12,7 @@
 | 调用模型，返回完整回答或逐字输出 | 普通 JSON 调用和 SSE 流式调用。 | [普通调用](PAYMENT_SDK_INTEGRATION.md#普通调用与余额不足)、[流式调用](PAYMENT_SDK_INTEGRATION.md#流式调用) |
 | 余额不足时引导用户付款 | 识别需要付款的响应，把平台凭证交给承载聊天界面的应用，由它打开 Combo 收银台。 | [付款并继续](PAYMENT_SDK_INTEGRATION.md#付款并继续) |
 | 网络断开后找回原支付单 | 用保存的支付请求编号查询原单，避免重复下单。 | [创建结果不确定](PAYMENT_SDK_INTEGRATION.md#错误和创建结果不确定) |
+| 付款码缺失或过期后继续付款 | `0.2.0` 提供独立 V2 客户端，支持显式恢复、进度查询和保留恢复编号；须由平台先提供可用的 V2 服务。 | [付款码恢复](PAYMENT_RECOVERY.md#开始接入) |
 | 付款后继续原任务，重复点击不重复执行 | 示例保存原请求和结果；已成功的任务返回保存结果。 | [业务如何继续](PAYMENT_SDK_INTEGRATION.md#业务如何继续) |
 | 模型明确失败且没扣钱时重试 | `0.1.1` 提供 `canRetrySameCall` 判断，应用据此让用户重试原任务。 | [错误处理表](PAYMENT_SDK_INTEGRATION.md#遇到问题时怎么处理) |
 | 检查安装包和接入配置 | 离线协议自检和配置诊断命令。 | [接入自检](PAYMENT_SDK_INTEGRATION.md#接入自检) |
@@ -24,9 +25,11 @@
 
 | 项目 | 对应版本或证据 |
 | --- | --- |
-| 本手册的 SDK 实现基线 | `665fdff8f82019d32d1099528ec0f0d1a15508a2`，包含 [SDK #1](https://github.com/dangdang-tech/combo-agent-sdk/pull/1)、[#3](https://github.com/dangdang-tech/combo-agent-sdk/pull/3)、[#4](https://github.com/dangdang-tech/combo-agent-sdk/pull/4)、[#5](https://github.com/dangdang-tech/combo-agent-sdk/pull/5)。 |
+| 本手册的 SDK 实现基线 | `7186c65809475782f274ee7beeeeef337c1b22cd`，对应已合入的 [SDK #8](https://github.com/dangdang-tech/combo-agent-sdk/pull/8)，版本 `0.2.0`，包含既有 V1 能力与独立 V2 恢复客户端。 |
 | 运行与安装 | SDK 支持 Node.js `>=20.9.0`；源码安装使用 Node.js 24 和 pnpm `11.0.9`。示例使用 Next.js `16.3.4`。 |
-| 支付接口格式 | `/v1/payments`，协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；随包提供 [OpenAPI 与校验值](contracts/payment-contract.lock.json)。这不是部署版本号。 |
+| V1 托管支付入口 | `createPaymentClient()` 使用 `/v1/payments`，协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；见 [V1 合同锁](contracts/payment-contract.lock.json)与[付款并继续](PAYMENT_SDK_INTEGRATION.md#付款并继续)。 |
+| V2 付款码恢复入口 | `createRecoverablePaymentClient()` 使用 `/v2/payments`，协议锁定 Combo `b3bf928c02d04ab3d042bdf3724da4deeec34e74`；见 [V2 合同锁](contracts/payment-recovery-contract.lock.json)与[恢复接入步骤](PAYMENT_RECOVERY.md#开始接入)。合同来源不代表部署版本。 |
+| 0.2.0 验证 | 上述源码已通过 [Node 20/24 CI](https://github.com/dangdang-tech/combo-agent-sdk/actions/runs/34822960181)、129 项 SDK/模板测试和打包消费检查；真实支付及消费方完整验收仍须单独完成。 |
 | 既有验证 | [2026-09-08 验证记录](https://github.com/dangdang-tech/Combo/issues/308#issuecomment-5583137476)记录了 SDK 87 项测试、安装消费检查、支付后恢复与失败重试联调。记录包含真实调用和测试替身，整体为 Mixed。 |
 | 仍需完成 | 正式版本发布，以及陌生接入者仅凭文档、锁定工件和受限 Test 配置完成整个支付流程的验收，继续由 [Combo #308](https://github.com/dangdang-tech/Combo/issues/308) 跟踪。 |
 
@@ -36,12 +39,12 @@
 
 ### 安装并检查 SDK
 
-需要本仓访问权限。下面固定到已有支付能力的源码版本，不依赖未发布的 npm 包名；使用平台交付的新版本时，同时更新完整 SHA 和工件校验值。
+下面固定到已合入的 `0.2.0` 源码，同时包含 V1 与 V2 客户端。SDK 尚未发布到 npm registry，使用锁定源码或平台提供的安装包；使用新的交付版本时，同时更新完整 SHA 和工件校验值。
 
 ```bash
 git clone https://github.com/dangdang-tech/combo-agent-sdk.git
 cd combo-agent-sdk
-git checkout 665fdff8f82019d32d1099528ec0f0d1a15508a2
+git checkout 7186c65809475782f274ee7beeeeef337c1b22cd
 
 # 使用 Node.js 24、pnpm 11.0.9。
 pnpm install --frozen-lockfile
@@ -57,10 +60,10 @@ pnpm conformance
 # 在 SDK 仓库运行。
 mkdir -p artifacts
 pnpm pack --pack-destination ./artifacts
-shasum -a 256 artifacts/combo-agent-sdk-0.1.1.tgz
+shasum -a 256 artifacts/combo-agent-sdk-0.2.0.tgz
 
 # 在你的应用目录运行，替换为上面生成文件的绝对路径。
-npm install /absolute/path/to/combo-agent-sdk/artifacts/combo-agent-sdk-0.1.1.tgz
+npm install /absolute/path/to/combo-agent-sdk/artifacts/combo-agent-sdk-0.2.0.tgz
 node node_modules/combo-agent-sdk/scripts/conformance.mjs
 ```
 
@@ -70,6 +73,7 @@ node node_modules/combo-agent-sdk/scripts/conformance.mjs
 
 - **先运行示例**：按[示例运行步骤](templates/nextjs-agent/README.md#运行)启动服务，再通过已配置登录与身份转交的 Combo Host 调用它。首页是服务说明页；聊天界面和收银台入口由 Host 提供。
 - **接入已有应用**：按[支付使用手册](PAYMENT_SDK_INTEGRATION.md)配置身份、调用模型、接入支付界面和业务恢复。手册区分 SDK API、模板代码和你需要实现的存储/界面适配。
+- **接入付款码恢复**：安装同一个 `0.2.0` 包后，按 [V2 接入步骤](PAYMENT_RECOVERY.md#开始接入)选择新客户端与 Host 示例。V1 行为保持兼容，升级安装包不会自动把原 Host 切换成 V2。
 
 ## 接入前准备什么
 
