@@ -18,7 +18,7 @@
 
 ## 现在能用到哪一步
 
-SDK `0.1.1` 已有下文全部 SDK API，模板已有普通模型调用、付款后继续和重复结果复用的代码。实现基线为 `665fdff8f82019d32d1099528ec0f0d1a15508a2`；[9 月 8 日验证记录](https://github.com/dangdang-tech/Combo/issues/308#issuecomment-5583137476)包含已有支付接入、失败恢复测试及其真实/模拟边界。
+当前 SDK 为 `0.2.0`，实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`。下文的 V1 支付 API、普通模型调用、付款后继续和重复结果复用保持兼容；V2 付款码恢复使用独立客户端，见[恢复接入步骤](PAYMENT_RECOVERY.md#开始接入)。[9 月 8 日历史验证记录](https://github.com/dangdang-tech/Combo/issues/308#issuecomment-5583137476)仍作为当时支付接入及真实/模拟边界的证据，当前版本验证见 [README](README.md#当前版本与完成情况)。
 
 当前仍是私有预发布 `UNRELEASED / PARTIAL`。正式发布、独立接入者完整验收由 [Combo #308](https://github.com/dangdang-tech/Combo/issues/308) 跟踪。本文说明已有能力，不把历史 Mixed 验证或本地自检等同于 Production 可用。
 

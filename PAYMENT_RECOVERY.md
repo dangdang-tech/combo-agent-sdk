@@ -4,6 +4,14 @@ SDK `0.2.0` 增加显式选择的 v2 客户端和 Host 协调示例，状态为 
 
 现有 `createPaymentClient()`、`createHostPaymentFlow()`、v1 OpenAPI 和 402 三字段消息保持兼容。已有消费方不必迁移。新项目或需要恢复能力的 Host 可以选择下文的 v2 接口。
 
+## 开始接入
+
+1. 按 [README 的安装步骤](README.md#安装并检查-sdk)取得锁定的 `0.2.0` 源码或安装包，先运行离线 conformance，并可用测试替身编写客户端及 Host 接入。这些步骤可以独立完成，不需要创建真实支付。
+2. 由平台维护者完成恢复代码与目标环境现有账号、套餐等扩展的兼容整合，核对迁移记录并完成恢复所需迁移；确认 `BILLING_PAYMENTS_ENABLED=true`、`BILLING_PAYMENT_RECOVERY_ENABLED=true`，以及 `/v2/payments`、`/v2/payment-checkouts` 和 `/payments/{id}?version=2` 已接通。仅合入 PR 或安装新版 SDK 不代表这些前置条件已满足。
+3. 获得平台确认的 Billing 地址、允许的 Host Origin 和有效用户会话后，装配下文的 [V2 客户端](#创建-v2-客户端)与 [Host 按钮](#接入-host-按钮)，再进行受控联调。Host 须保存恢复编号和原业务上下文。
+
+本手册处理余额不足后的托管支付及付款码恢复。观照等业务已有的套餐、点数和 `/v1/commerce` 接口不属于 SDK `0.2.0` 的公开支付合同，须按相应业务接口单独接入；不能直接套用这里的恢复流程。
+
 ## 先准备平台与 Host
 
 平台须提供已开启 v2 的 Billing 地址、允许的 Host Origin 和当前用户会话。Agent 的模型令牌不能代替 Host 会话。收银台与 Billing 不同源时，由平台确认受信收银台 origin，并写入 Host 的可信配置；不能从 Agent 消息中获得这个列表。

@@ -2,7 +2,7 @@
 
 先阅读 [README 能力入口](README.md)与[支付使用手册](PAYMENT_SDK_INTEGRATION.md)，再按本指南实现消费方代码。
 
-SDK `0.1.1` 已提供支付客户端、身份接入、安全重试判断和业务恢复示例；状态仍为 `UNRELEASED / PARTIAL`。既有测试与联调证据见 [README 版本记录](README.md#当前版本与完成情况)，不把未发布误解为支付能力尚未实现，也不把模块测试当成完整环境验收。
+当前 SDK 为 `0.2.0`，锁定实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`；状态仍为 `UNRELEASED / PARTIAL`。下文既有 V1 支付 API 保持兼容；付款码缺失或过期后的 V2 恢复接入见 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md#开始接入)。版本与验证记录见 [README](README.md#当前版本与完成情况)，不把模块测试当成完整环境验收。
 
 ## 输入
 
