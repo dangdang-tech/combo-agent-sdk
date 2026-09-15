@@ -554,11 +554,37 @@ describe('public service-commerce client', () => {
     };
     expect(await client(async () => ok(qr)).getOrder(orderId)).toEqual(qr);
   });
-  it('rejects active QR on terminal orders, arbitrary image schemes and unsafe payment URLs', async () => {
+  it.each(['completed', 'closed', 'unknown'])('reads retained QR for %s orders without starting payment', async (status) => {
+    for (const payType of ['wechat', 'alipay']) {
+      const historical = {
+        ...order, payType, status,
+        paidAt: status === 'completed' ? '2026-09-15T02:00:00Z' : null,
+        qrImage: png, paymentUrl: 'https://provider.test/pay/retained',
+      };
+      const fetcher = vi.fn<NonNullable<CommerceClientOptions['fetch']>>(async () => ok(historical));
+      expect(await client(fetcher).getOrder(orderId)).toEqual(historical);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher.mock.calls[0]?.[0]).toBe(origin + '/v1/commerce/orders/' + orderId);
+      expect(fetcher.mock.calls[0]?.[1]?.method).toBe('GET');
+    }
+  });
+  it('reads completion after creation when the provider retains the original QR', async () => {
+    const pending = { ...order, status: 'pending', qrImage: png, paymentUrl: 'https://provider.test/pay/retained' };
+    const completed = { ...pending, status: 'completed', paidAt: '2026-09-15T02:00:00Z' };
+    const fetcher = vi.fn<NonNullable<CommerceClientOptions['fetch']>>()
+      .mockResolvedValueOnce(ok(pending)).mockResolvedValueOnce(ok(completed));
+    const c = client(fetcher);
+    expect(await c.createOrder(input)).toEqual(pending);
+    expect(await c.getOrder(orderId)).toEqual(completed);
+    expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(['POST', 'GET']);
+  });
+  it('rejects arbitrary image schemes and unsafe payment URLs in every order state', async () => {
     for (const value of [
-      { ...order, qrImage: png },
       { ...order, status: 'pending', qrImage: 'https://untrusted.test/qr.png' },
       { ...order, status: 'pending', qrImage: 'data:image/svg+xml;base64,PHN2Zy8+' },
+      { ...order, status: 'closed', qrImage: 'data:image/svg+xml;base64,PHN2Zy8+' },
+      { ...order, status: 'unknown', qrImage: png, paymentUrl: 'http://provider.test/pay' },
+      { ...order, status: 'closed', qrImage: png + 'A'.repeat(128 * 1024) },
       { ...order, status: 'pending', qrImage: png, paymentUrl: 'http://provider.test/pay' },
       {
         ...order,

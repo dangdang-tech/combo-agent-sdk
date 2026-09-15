@@ -121,7 +121,7 @@ const order = await commerce.getOrder(savedOrderId, { signal });
 
 ## 展示订单状态
 
-订单返回 `id`、`userId`、`agentId`、套餐快照、金额、点数、支付方式、时间和 `testMode`。`paidAt` 未付款时为 null，迟到付款时可以晚于 `expiresAt`。扫码订单的 `qrImage` 与 `paymentUrl` 可选，只在 pending 且平台有可用二维码时出现；pending 也可能没有二维码。Stripe 使用独立的可选 `checkoutUrl`，不会被转换为二维码或 `paymentUrl`。
+订单返回 `id`、`userId`、`agentId`、套餐快照、金额、点数、支付方式、时间和 `testMode`。`paidAt` 未付款时为 null，迟到付款时可以晚于 `expiresAt`。扫码订单的 `qrImage` 与 `paymentUrl` 可选，pending 也可能没有二维码；历史 completed、closed 或 unknown 订单可能保留原付款信息，SDK 正常读取但不触发支付操作。Stripe 使用独立的可选 `checkoutUrl`，不会被转换为二维码或 `paymentUrl`。
 
 | status | 页面含义 |
 | --- | --- |
@@ -132,7 +132,7 @@ const order = await commerce.getOrder(savedOrderId, { signal });
 | `closed` | 本地订单付款入口已到期；不是已调用渠道关单的证明。 |
 | `completed` | 平台确认该套餐已入账，重新查询账户点数。 |
 
-`qrImage` 只接受有界 PNG data URL；`paymentUrl` 只接受无嵌入凭据的 HTTPS URL。不能将 Agent 自报的网址当作这些字段。付款完成后业务是否继续、以及结果是否已经保存，仍由原业务处理器判断。
+`qrImage` 只接受非 Stripe 订单的有界 PNG data URL；`paymentUrl` 只接受无嵌入凭据的 HTTPS URL，且必须同时具有合规二维码。字段存在不代表仍可付款；Host 只在 pending 且当前时间早于 `expiresAt` 时显示付款信息，其他状态隐藏入口并按需查询。不能将 Agent 自报的网址当作这些字段。付款完成后业务是否继续、以及结果是否已经保存，仍由原业务处理器判断。
 
 `checkoutUrl` 只接受 Stripe 订单、有效外币冻结金额和精确 `https://checkout.stripe.com` 来源，拒绝嵌入凭据、伪装子域、自定义域名及非 HTTPS；合法 URL 片段会保留。历史订单可保留可信 URL，存在该字段不代表还能付款。Host 只在订单 pending 且当前时间早于 `expiresAt` 时显示入口，只有用户点击才打开。跳回页面或点击“我已支付”不算到账，仍查询原订单直到平台返回 completed。
 

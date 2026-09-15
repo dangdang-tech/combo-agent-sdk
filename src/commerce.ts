@@ -435,7 +435,6 @@ function parseOrder(value: unknown): CommerceOrder {
   };
   if (x.qrImage !== undefined) {
     if (
-      result.status !== 'pending' ||
       result.payType === 'stripe' ||
       typeof x.qrImage !== 'string' ||
       x.qrImage.length > 128 * 1024 ||
