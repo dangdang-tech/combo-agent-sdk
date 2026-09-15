@@ -26,7 +26,7 @@
 
 | 项目 | 对应版本或证据 |
 | --- | --- |
-| 本手册的 SDK 实现基线 | `04e6d04ea2d0361e6a5bad9617994570665b4845`，版本 `0.4.0`，包含 Commerce 扩展实现与测试；既有钱包能力来自已合入的 [SDK #8](https://github.com/dangdang-tech/combo-agent-sdk/pull/8)。 |
+| 本手册的 SDK 实现基线 | `4fb5fb6a4f009b529ac46c391256fe82f17a2fb7`，版本 `0.4.0`，包含 Commerce 扩展实现与测试；既有钱包能力来自已合入的 [SDK #8](https://github.com/dangdang-tech/combo-agent-sdk/pull/8)。 |
 | 运行与安装 | SDK 支持 Node.js `>=20.9.0`；源码安装使用 Node.js 24 和 pnpm `11.0.9`。示例使用 Next.js `16.3.4`。 |
 | V1 托管支付入口 | `createPaymentClient()` 使用 `/v1/payments`，协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；见 [V1 合同锁](contracts/payment-contract.lock.json)与[付款并继续](PAYMENT_SDK_INTEGRATION.md#付款并继续)。 |
 | V2 付款码恢复入口 | `createRecoverablePaymentClient()` 使用 `/v2/payments`，协议锁定 Combo `b3bf928c02d04ab3d042bdf3724da4deeec34e74`；见 [V2 合同锁](contracts/payment-recovery-contract.lock.json)与[恢复接入步骤](PAYMENT_RECOVERY.md#开始接入)。合同来源不代表部署版本。 |
@@ -45,7 +45,7 @@
 ```bash
 git clone https://github.com/dangdang-tech/combo-agent-sdk.git
 cd combo-agent-sdk
-git checkout 04e6d04ea2d0361e6a5bad9617994570665b4845
+git checkout 4fb5fb6a4f009b529ac46c391256fe82f17a2fb7
 
 # 使用 Node.js 24、pnpm 11.0.9。
 pnpm install --frozen-lockfile
