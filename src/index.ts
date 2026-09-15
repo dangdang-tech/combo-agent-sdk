@@ -78,3 +78,20 @@ export {
   type RecoverablePaymentView,
   type RecoverPaymentInput,
 } from './recoverable-payments.js';
+export {
+  createCommerceClient,
+  CommerceApiError,
+  type CommerceApiErrorCode,
+  type CommerceClient,
+  type CommerceClientOptions,
+  type CommerceRequestOptions,
+  type CommerceCatalog,
+  type CommercePackage,
+  type CommerceService,
+  type CommerceOrder,
+  type CommerceOrderSummary,
+  type CommerceOrderStatus,
+  type CommerceAccount,
+  type CommerceLedgerEntry,
+  type CreateCommerceOrderInput,
+} from './commerce.js';

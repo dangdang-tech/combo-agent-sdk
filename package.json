@@ -1,6 +1,6 @@
 {
   "name": "combo-agent-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "packageManager": "pnpm@11.0.9",
   "description": "Combo Agent 运行时 SDK：身份断言、模型网关、钱包读模型与托管支付客户端。",
@@ -21,6 +21,7 @@
     "scripts/conformance.mjs",
     "PAYMENT_SDK_INTEGRATION.md",
     "PAYMENT_RECOVERY.md",
+    "COMMERCE_INTEGRATION.md",
     "AGENT.md",
     "templates/nextjs-agent/.env.example",
     "templates/nextjs-agent/README.md",
