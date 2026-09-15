@@ -10,12 +10,33 @@ export type CommerceOrderStatus =
   | 'failed'
   | 'closed'
   | 'completed';
+export type CommercePayType = 'wechat' | 'alipay' | 'stripe';
+export type CommerceCurrency = 'CNY' | 'USD' | 'HKD' | 'EUR' | 'GBP';
+export interface CommercePaymentAmount {
+  currency: CommerceCurrency;
+  amountMinor: number;
+}
+export interface CommercePaymentMethod {
+  id: CommercePayType;
+  label: string;
+  enabled: boolean;
+  reason?: string;
+  flow: 'qr' | 'redirect';
+  testMode: boolean;
+}
+export interface CommercePaymentOption {
+  payType: CommercePayType;
+  enabled: boolean;
+  reason?: string;
+  amount?: CommercePaymentAmount;
+}
 export interface CommercePackage {
   id: string;
   name: string;
   points: number;
   amountCents: number;
   validDays: number;
+  paymentOptions?: CommercePaymentOption[];
 }
 export interface CommerceService {
   id: string;
@@ -29,6 +50,7 @@ export interface CommerceCatalog {
   packages: CommercePackage[];
   services: CommerceService[];
   testMode: boolean;
+  paymentMethods?: CommercePaymentMethod[];
 }
 export interface CommerceOrderSummary {
   id: string;
@@ -39,7 +61,9 @@ export interface CommerceOrderSummary {
   points: number;
   amountCents: number;
   validDays: number;
-  payType: 'wechat' | 'alipay';
+  payType: CommercePayType;
+  /** Frozen charge amount; amountCents remains the legacy CNY reference price. */
+  paymentAmount?: CommercePaymentAmount;
   /** closed is the local order expiry, not proof that the payment provider closed its order. */
   status: CommerceOrderStatus;
   createdAt: string;
@@ -49,6 +73,8 @@ export interface CommerceOrderSummary {
 export interface CommerceOrder extends CommerceOrderSummary {
   qrImage?: string;
   paymentUrl?: string;
+  /** Stripe-hosted checkout only; the Host must also check the current expiry. */
+  checkoutUrl?: string;
   testMode: boolean;
 }
 export interface CommerceLedgerEntry {
@@ -75,7 +101,7 @@ export interface CreateCommerceOrderInput {
   catalogVersion: string;
   /** Persist this UUID before POST. Keep it if the result is unknown or not yet visible. */
   requestKey: string;
-  payType: 'wechat' | 'alipay';
+  payType: CommercePayType;
 }
 export interface CommerceRequestOptions {
   signal?: AbortSignal;
@@ -104,6 +130,7 @@ export type CommerceApiErrorCode =
   | 'not_found'
   | 'conflict'
   | 'catalog_changed'
+  | 'payment_method_unavailable'
   | 'too_many_orders'
   | 'unavailable'
   | 'invalid_response'
@@ -124,7 +151,10 @@ export class CommerceApiError extends Error {
         ? 'commerce creation result is unknown; query with the original requestKey'
         : `commerce request failed (${code})`,
     );
-    Object.defineProperty(this, 'name', { value: 'CommerceApiError', enumerable: false });
+    Object.defineProperty(this, 'name', {
+      value: 'CommerceApiError',
+      enumerable: false,
+    });
     this.code = code;
     this.#status = status;
     this.#traceId = traceId;
@@ -174,7 +204,11 @@ const summaryKeys = [
 function invalid(): never {
   throw new CommerceApiError('invalid_response');
 }
-function object(value: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
+function object(
+  value: unknown,
+  keys: string[],
+  optional: string[] = [],
+): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return invalid();
   const record = value as Record<string, unknown>;
   const allowed = new Set([...keys, ...optional]);
@@ -190,7 +224,12 @@ function matching(value: unknown, pattern: RegExp): string {
   return value;
 }
 function textValue(value: unknown, max = 80): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > max || !SAFE_TEXT.test(value))
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.length > max ||
+    !SAFE_TEXT.test(value)
+  )
     return invalid();
   return value;
 }
@@ -226,7 +265,7 @@ function duration(value: unknown): number {
     throw new CommerceApiError('invalid_request');
   return value;
 }
-function validUrl(value: unknown): URL {
+function validUrl(value: unknown, allowFragment = false): URL {
   if (
     typeof value !== 'string' ||
     value.length > 4096 ||
@@ -240,26 +279,95 @@ function validUrl(value: unknown): URL {
   } catch {
     return invalid();
   }
-  if (url.username || url.password || url.hash || (url.href !== value && url.href !== `${value}/`))
+  if (
+    url.username ||
+    url.password ||
+    (!allowFragment && url.hash) ||
+    (url.href !== value && url.href !== `${value}/`)
+  )
     return invalid();
   return url;
 }
+function payType(value: unknown): CommercePayType {
+  return matching(value, /^(wechat|alipay|stripe)$/) as CommercePayType;
+}
+function paymentAmount(value: unknown, method: CommercePayType): CommercePaymentAmount {
+  const x = object(value, ['currency', 'amountMinor']);
+  const currency = matching(x.currency, /^(CNY|USD|HKD|EUR|GBP)$/) as CommerceCurrency;
+  if ((method === 'stripe') === (currency === 'CNY')) return invalid();
+  return {
+    currency,
+    amountMinor: integer(x.amountMinor, 1, Number.MAX_SAFE_INTEGER),
+  };
+}
+function paymentMethod(value: unknown): CommercePaymentMethod {
+  const x = object(value, ['id', 'label', 'enabled', 'flow', 'testMode'], ['reason']);
+  const id = payType(x.id);
+  const flow = id === 'stripe' ? 'redirect' : 'qr';
+  if (x.flow !== flow) return invalid();
+  return {
+    id,
+    label: textValue(x.label),
+    enabled: flag(x.enabled),
+    flow,
+    testMode: flag(x.testMode),
+    ...(x.reason === undefined ? {} : { reason: textValue(x.reason) }),
+  };
+}
+function paymentOption(value: unknown): CommercePaymentOption {
+  const x = object(value, ['payType', 'enabled'], ['reason', 'amount']);
+  const method = payType(x.payType);
+  const enabled = flag(x.enabled);
+  if (enabled && x.amount === undefined) return invalid();
+  return {
+    payType: method,
+    enabled,
+    ...(x.reason === undefined ? {} : { reason: textValue(x.reason) }),
+    ...(x.amount === undefined ? {} : { amount: paymentAmount(x.amount, method) }),
+  };
+}
+function uniqueMethods<T>(
+  value: unknown,
+  parse: (v: unknown) => T,
+  key: (v: T) => string,
+): T[] {
+  const result = list(value, parse, 3);
+  if (new Set(result.map(key)).size !== result.length) return invalid();
+  return result;
+}
 function parsePackage(value: unknown): CommercePackage {
-  const x = object(value, ['id', 'name', 'points', 'amountCents', 'validDays']);
+  const x = object(
+    value,
+    ['id', 'name', 'points', 'amountCents', 'validDays'],
+    ['paymentOptions'],
+  );
   return {
     id: matching(x.id, ID),
     name: textValue(x.name),
     points: integer(x.points),
     amountCents: integer(x.amountCents),
     validDays: integer(x.validDays, 1, 3650),
+    ...(x.paymentOptions === undefined
+      ? {}
+      : {
+          paymentOptions: uniqueMethods(x.paymentOptions, paymentOption, (v) => v.payType),
+        }),
   };
 }
 function parseService(value: unknown): CommerceService {
   const x = object(value, ['id', 'name', 'points']);
-  return { id: matching(x.id, ID), name: textValue(x.name), points: integer(x.points) };
+  return {
+    id: matching(x.id, ID),
+    name: textValue(x.name),
+    points: integer(x.points),
+  };
 }
 function parseCatalog(value: unknown): CommerceCatalog {
-  const x = object(value, ['agentId', 'name', 'version', 'packages', 'services', 'testMode']);
+  const x = object(
+    value,
+    ['agentId', 'name', 'version', 'packages', 'services', 'testMode'],
+    ['paymentMethods'],
+  );
   const packages = list(x.packages, parsePackage, 12, 1),
     services = list(x.services, parseService, 12, 1);
   if (
@@ -274,9 +382,15 @@ function parseCatalog(value: unknown): CommerceCatalog {
     packages,
     services,
     testMode: flag(x.testMode),
+    ...(x.paymentMethods === undefined
+      ? {}
+      : {
+          paymentMethods: uniqueMethods(x.paymentMethods, paymentMethod, (v) => v.id),
+        }),
   };
 }
 function parseSummary(x: Record<string, unknown>): CommerceOrderSummary {
+  const method = payType(x.payType);
   const status = matching(
     x.status,
     /^(waiting|submitting|pending|unknown|failed|closed|completed)$/,
@@ -299,7 +413,10 @@ function parseSummary(x: Record<string, unknown>): CommerceOrderSummary {
     points: integer(x.points),
     amountCents: integer(x.amountCents),
     validDays: integer(x.validDays, 1, 3650),
-    payType: matching(x.payType, /^(wechat|alipay)$/) as 'wechat' | 'alipay',
+    payType: method,
+    ...(x.paymentAmount === undefined
+      ? {}
+      : { paymentAmount: paymentAmount(x.paymentAmount, method) }),
     status,
     createdAt,
     expiresAt,
@@ -307,11 +424,19 @@ function parseSummary(x: Record<string, unknown>): CommerceOrderSummary {
   };
 }
 function parseOrder(value: unknown): CommerceOrder {
-  const x = object(value, [...summaryKeys, 'testMode'], ['qrImage', 'paymentUrl']);
-  const result: CommerceOrder = { ...parseSummary(x), testMode: flag(x.testMode) };
+  const x = object(
+    value,
+    [...summaryKeys, 'testMode'],
+    ['qrImage', 'paymentUrl', 'paymentAmount', 'checkoutUrl'],
+  );
+  const result: CommerceOrder = {
+    ...parseSummary(x),
+    testMode: flag(x.testMode),
+  };
   if (x.qrImage !== undefined) {
     if (
       result.status !== 'pending' ||
+      result.payType === 'stripe' ||
       typeof x.qrImage !== 'string' ||
       x.qrImage.length > 128 * 1024 ||
       !/^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+/]*(?:={0,2})$/.test(x.qrImage) ||
@@ -323,6 +448,15 @@ function parseOrder(value: unknown): CommerceOrder {
   if (x.paymentUrl !== undefined) {
     if (!result.qrImage || validUrl(x.paymentUrl).protocol !== 'https:') return invalid();
     result.paymentUrl = x.paymentUrl as string;
+  }
+  if (x.checkoutUrl !== undefined) {
+    if (
+      result.payType !== 'stripe' ||
+      !result.paymentAmount ||
+      validUrl(x.checkoutUrl, true).origin !== 'https://checkout.stripe.com'
+    )
+      return invalid();
+    result.checkoutUrl = x.checkoutUrl as string;
   }
   return result;
 }
@@ -338,7 +472,11 @@ function parseAccount(value: unknown): CommerceAccount {
     'testMode',
   ]);
   const userId = matching(x.userId, UUID);
-  const orders = list(x.orders, (v) => parseSummary(object(v, summaryKeys)), 50);
+  const orders = list(
+    x.orders,
+    (v) => parseSummary(object(v, summaryKeys, ['paymentAmount'])),
+    50,
+  );
   if (orders.some((o) => o.userId !== userId)) return invalid();
   const ledger = list(
     x.ledger,
@@ -385,7 +523,7 @@ function parseError(status: number, payload: unknown): CommerceApiError {
     401: ['unauthenticated'],
     403: ['unauthenticated'],
     404: ['not_found'],
-    409: ['conflict', 'catalog_changed'],
+    409: ['conflict', 'catalog_changed', 'payment_method_unavailable'],
     429: ['too_many_orders'],
     503: ['unavailable'],
   };
@@ -393,8 +531,10 @@ function parseError(status: number, payload: unknown): CommerceApiError {
   return new CommerceApiError(code as CommerceApiErrorCode, status, traceId);
 }
 function sameBrowserOrigin(base: URL) {
-  const location = (globalThis as typeof globalThis & { location?: { origin?: string } }).location;
-  if (location && location.origin !== base.origin) throw new CommerceApiError('invalid_request');
+  const location = (globalThis as typeof globalThis & { location?: { origin?: string } })
+    .location;
+  if (location && location.origin !== base.origin)
+    throw new CommerceApiError('invalid_request');
 }
 function aborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -472,7 +612,10 @@ export function createCommerceClient(options: CommerceClientOptions): CommerceCl
         controller.signal,
       );
       status = response.status;
-      if (response.redirected || (response.url && new URL(response.url).origin !== base.origin)) {
+      if (
+        response.redirected ||
+        (response.url && new URL(response.url).origin !== base.origin)
+      ) {
         void response.body?.cancel().catch(() => undefined);
         return invalid();
       }
@@ -551,7 +694,7 @@ export function createCommerceClient(options: CommerceClientOptions): CommerceCl
           packageId: matching(x.packageId, ID),
           catalogVersion: matching(x.catalogVersion, VERSION),
           requestKey: matching(x.requestKey, UUID),
-          payType: matching(x.payType, /^(wechat|alipay)$/) as 'wechat' | 'alipay',
+          payType: payType(x.payType),
         };
       } catch {
         return Promise.reject(new CommerceApiError('invalid_request'));
