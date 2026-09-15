@@ -2,7 +2,7 @@
 
 先阅读 [README 能力入口](README.md)与[支付使用手册](PAYMENT_SDK_INTEGRATION.md)，再按本指南实现消费方代码。
 
-当前 SDK 为 `0.2.0`，锁定实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`；状态仍为 `UNRELEASED / PARTIAL`。下文既有 V1 支付 API 保持兼容；付款码缺失或过期后的 V2 恢复接入见 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md#开始接入)。版本与验证记录见 [README](README.md#当前版本与完成情况)，不把模块测试当成完整环境验收。
+当前 SDK 为 `0.3.0`，状态仍为 `UNRELEASED / PARTIAL`；新增独立 [Commerce 客户端](COMMERCE_INTEGRATION.md)。既有钱包支付实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`。下文既有 V1 支付 API 保持兼容；付款码缺失或过期后的 V2 恢复接入见 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md#开始接入)。版本与验证记录见 [README](README.md#当前版本与完成情况)，不把模块测试当成完整环境验收。
 
 ## 输入
 
@@ -84,3 +84,7 @@ pnpm --filter combo-reference-agent build
 恢复由 Host 当前会话授权，只有用户明确点击恢复才调用 recover。POST 前持久化 recoveryKey 和 expectedAttemptId，结果未知时只查询原支付并保留原 key；不要换新 key、callId、operationId 或自行决定渠道关单。以服务端 canRecover 决定按钮，以逻辑 completed 决定业务续接，不能把 checkout.closed 当作整个支付结束。
 
 模板 `createRecoverableHostPaymentFlow()` 定义 start/check/recover/open/resume 独立动作和耐久存储接口。业务继续使用原有 OperationStore 与 resume 接口，当前用户变化时停止操作。
+
+## 套餐与服务点数（0.3.0 私有预发布）
+
+使用 [COMMERCE_INTEGRATION.md](COMMERCE_INTEGRATION.md) 中独立 `createCommerceClient()`。该客户端只封装现有 `/v1/commerce` 浏览器会话接口，不接收 wallet paymentToken、不替业务预留或消费点数。Host 下单前保存原 requestKey；未知结果和 findOrder 404 都保留编号，只查询，不自动新建订单。浏览器 baseUrl 必须同源，禁传 Authorization 或自报用户。`closed` 仅为本地到期，不代表渠道关单。接口来源是已核实服务器发布快照；Wallet Payment OpenAPI 锁不覆盖 Commerce，不能混用协议或声称套餐接口已经完成正式协议发布。
