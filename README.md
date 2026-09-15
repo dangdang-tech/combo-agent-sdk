@@ -15,18 +15,18 @@
 | 付款码缺失或过期后继续付款 | `0.2.0` 提供独立 V2 客户端，支持显式恢复、进度查询和保留恢复编号；须由平台先提供可用的 V2 服务。 | [付款码恢复](PAYMENT_RECOVERY.md#开始接入) |
 | 付款后继续原任务，重复点击不重复执行 | 示例保存原请求和结果；已成功的任务返回保存结果。 | [业务如何继续](PAYMENT_SDK_INTEGRATION.md#业务如何继续) |
 | 模型明确失败且没扣钱时重试 | `0.1.1` 提供 `canRetrySameCall` 判断，应用据此让用户重试原任务。 | [错误处理表](PAYMENT_SDK_INTEGRATION.md#遇到问题时怎么处理) |
-| 购买 Agent 套餐并查询服务点数 | `0.3.0` 提供独立 Commerce Client，保存原购买编号后创建或查询套餐订单。 | [套餐接入](COMMERCE_INTEGRATION.md) |
+| 购买 Agent 套餐并查询服务点数 | `0.4.0` 保留独立 Commerce Client，增加可选付款方式、币种金额和 Stripe 跳转兼容；渠道开通须另行确认。 | [套餐接入](COMMERCE_INTEGRATION.md) |
 | 检查安装包和接入配置 | 离线协议自检和配置诊断命令。 | [接入自检](PAYMENT_SDK_INTEGRATION.md#接入自检) |
 
 **第一次接入请读[支付使用手册](PAYMENT_SDK_INTEGRATION.md)**；想先运行代码，请看 [Next.js 示例](templates/nextjs-agent/README.md)；让编码 Agent 帮你接入，请同时提供 [AGENT.md](AGENT.md)。
 
 ## 当前版本与完成情况
 
-当前源码版本为 **0.3.0，私有预发布（UNRELEASED / PARTIAL）**。新增独立的套餐与服务点数客户端，接入见 [Commerce 手册](COMMERCE_INTEGRATION.md)；它使用现有 `/v1/commerce` 接口，不接收钱包 paymentToken。新增显式选择的 v2 付款码恢复客户端与 Host 示例，接入见[付款码恢复手册](PAYMENT_RECOVERY.md)。配套平台 [PR #368](https://github.com/dangdang-tech/Combo/pull/368) 已合入，V2 合同锁绑定其实际合并提交；这不表示已部署或完成真实支付验收。既有 v1 API 保持兼容。支付客户端、身份接入、付款后继续的示例和失败重试判断均已实现；还没有正式 Tag、Release 或 npm 发布。
+当前源码版本为 **0.4.0，私有预发布（UNRELEASED / PARTIAL）**。套餐与服务点数客户端增加可选付款方式、冻结币种金额和 Stripe 跳转字段，接入见 [Commerce 手册](COMMERCE_INTEGRATION.md)；它使用 `/v1/commerce` 接口，不接收钱包 paymentToken。可选扩展兼容观照候选合同，不代表现网 Stripe 或外币收款已开通。新增显式选择的 v2 付款码恢复客户端与 Host 示例，接入见[付款码恢复手册](PAYMENT_RECOVERY.md)。配套平台 [PR #368](https://github.com/dangdang-tech/Combo/pull/368) 已合入，V2 合同锁绑定其实际合并提交；这不表示已部署或完成真实支付验收。既有 v1 API 保持兼容。支付客户端、身份接入、付款后继续的示例和失败重试判断均已实现；还没有正式 Tag、Release 或 npm 发布。
 
 | 项目 | 对应版本或证据 |
 | --- | --- |
-| 本手册的 SDK 实现基线 | `9a65dcc63886fcc69e6bca6d859677b09bd42856`，版本 `0.3.0`，包含 Commerce 客户端及文档；既有钱包能力来自已合入的 [SDK #8](https://github.com/dangdang-tech/combo-agent-sdk/pull/8)。 |
+| 本手册的 SDK 实现基线 | `0a443d4f49babe9d70a56824dbff35c415a04a49`，版本 `0.4.0`，包含 Commerce 扩展实现与测试；既有钱包能力来自已合入的 [SDK #8](https://github.com/dangdang-tech/combo-agent-sdk/pull/8)。 |
 | 运行与安装 | SDK 支持 Node.js `>=20.9.0`；源码安装使用 Node.js 24 和 pnpm `11.0.9`。示例使用 Next.js `16.3.4`。 |
 | V1 托管支付入口 | `createPaymentClient()` 使用 `/v1/payments`，协议锁定 Combo `84d75d8cc604fd70253bd0598006f92a0f4c9434`；见 [V1 合同锁](contracts/payment-contract.lock.json)与[付款并继续](PAYMENT_SDK_INTEGRATION.md#付款并继续)。 |
 | V2 付款码恢复入口 | `createRecoverablePaymentClient()` 使用 `/v2/payments`，协议锁定 Combo `b3bf928c02d04ab3d042bdf3724da4deeec34e74`；见 [V2 合同锁](contracts/payment-recovery-contract.lock.json)与[恢复接入步骤](PAYMENT_RECOVERY.md#开始接入)。合同来源不代表部署版本。 |
@@ -40,12 +40,12 @@
 
 ### 安装并检查 SDK
 
-下面固定到 `0.3.0` 私有预发布源码，同时包含 V1/V2 钱包支付与独立 Commerce 客户端。SDK 尚未发布到 npm registry，使用锁定源码或平台提供的安装包；使用新的交付版本时，同时更新完整 SHA 和工件校验值。
+下面固定到 `0.4.0` 私有预发布源码，同时包含 V1/V2 钱包支付与独立 Commerce 客户端。SDK 尚未发布到 npm registry，使用锁定源码或平台提供的安装包；使用新的交付版本时，同时更新完整 SHA 和工件校验值。
 
 ```bash
 git clone https://github.com/dangdang-tech/combo-agent-sdk.git
 cd combo-agent-sdk
-git checkout 9a65dcc63886fcc69e6bca6d859677b09bd42856
+git checkout 0a443d4f49babe9d70a56824dbff35c415a04a49
 
 # 使用 Node.js 24、pnpm 11.0.9。
 pnpm install --frozen-lockfile
@@ -61,10 +61,10 @@ pnpm conformance
 # 在 SDK 仓库运行。
 mkdir -p artifacts
 pnpm pack --pack-destination ./artifacts
-shasum -a 256 artifacts/combo-agent-sdk-0.3.0.tgz
+shasum -a 256 artifacts/combo-agent-sdk-0.4.0.tgz
 
 # 在你的应用目录运行，替换为上面生成文件的绝对路径。
-npm install /absolute/path/to/combo-agent-sdk/artifacts/combo-agent-sdk-0.3.0.tgz
+npm install /absolute/path/to/combo-agent-sdk/artifacts/combo-agent-sdk-0.4.0.tgz
 node node_modules/combo-agent-sdk/scripts/conformance.mjs
 ```
 
