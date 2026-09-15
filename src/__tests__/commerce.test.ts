@@ -1,6 +1,14 @@
 import { inspect } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommerceApiError, createCommerceClient, type CommerceClientOptions } from '../index.js';
+import {
+  CommerceApiError,
+  createCommerceClient,
+  type CommerceClientOptions,
+  type CommercePaymentAmount,
+  type CommercePaymentMethod,
+  type CommercePaymentOption,
+  type CommercePayType,
+} from '../index.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const orderId = '22222222-2222-4222-8222-222222222222';
@@ -36,7 +44,15 @@ const catalog = {
   agentId: 'guanzhao',
   name: '观照',
   version,
-  packages: [{ id: 'starter', name: '体验套餐', points: 10, amountCents: 100, validDays: 30 }],
+  packages: [
+    {
+      id: 'starter',
+      name: '体验套餐',
+      points: 10,
+      amountCents: 100,
+      validDays: 30,
+    },
+  ],
   services: [{ id: 'reading', name: '解读', points: 2 }],
   testMode: true,
 };
@@ -68,6 +84,283 @@ const client = (fetcher: NonNullable<CommerceClientOptions['fetch']>) =>
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe('optional commerce payment capabilities', () => {
+  const method: CommercePaymentMethod = {
+    id: 'stripe',
+    label: '国际银行卡与钱包',
+    enabled: true,
+    flow: 'redirect',
+    testMode: true,
+  };
+  const amount: CommercePaymentAmount = { currency: 'USD', amountMinor: 50 };
+  const option: CommercePaymentOption = {
+    payType: 'stripe',
+    enabled: true,
+    amount,
+  };
+  const extended = {
+    ...catalog,
+    paymentMethods: [method],
+    packages: [{ ...catalog.packages[0], paymentOptions: [option] }],
+  };
+  const stripe = {
+    ...order,
+    payType: 'stripe' as CommercePayType,
+    paymentAmount: amount,
+    status: 'pending',
+    checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_fixture#fidkdWxOYHwn',
+  };
+
+  it('preserves extension fields, currencies and per-method test mode without replacing the reference price', async () => {
+    expect(await client(async () => ok(extended)).getCatalog('guanzhao')).toEqual(extended);
+    for (const currency of ['USD', 'HKD', 'EUR', 'GBP'] as const) {
+      const frozen = {
+        ...stripe,
+        paymentAmount: { currency, amountMinor: 123 },
+      };
+      expect(await client(async () => ok(frozen)).getOrder(orderId)).toEqual(frozen);
+    }
+    const qr = {
+      ...order,
+      paymentAmount: { currency: 'CNY', amountMinor: 100 },
+    };
+    expect(await client(async () => ok(qr)).getOrder(orderId)).toEqual(qr);
+    const data = { ...extended, testMode: false };
+    expect(
+      (await client(async () => ok(data)).getCatalog('guanzhao')).paymentMethods?.[0]?.testMode,
+    ).toBe(true);
+  });
+
+  it('does not turn absent, empty, disabled or partial capability metadata into legacy defaults', async () => {
+    const disabled = { ...method, enabled: false, reason: 'not_configured' };
+    const unpriced = {
+      payType: 'stripe',
+      enabled: false,
+      reason: 'price_not_configured',
+    };
+    for (const data of [
+      catalog,
+      { ...catalog, paymentMethods: [] },
+      { ...catalog, paymentMethods: [disabled] },
+      {
+        ...catalog,
+        packages: [{ ...catalog.packages[0], paymentOptions: [] }],
+      },
+      {
+        ...catalog,
+        packages: [{ ...catalog.packages[0], paymentOptions: [unpriced] }],
+      },
+      { ...extended, paymentMethods: [disabled] },
+      {
+        ...extended,
+        packages: [extended.packages[0], { ...catalog.packages[0], id: 'second' }],
+      },
+    ])
+      expect(await client(async () => ok(data)).getCatalog('guanzhao')).toEqual(data);
+  });
+
+  it('rejects malformed capability shapes, duplicate methods and incorrect provider flows', async () => {
+    for (const methods of [
+      null,
+      [method, method],
+      [{ ...method, id: 'card' }],
+      [{ ...method, flow: 'qr' }],
+      [{ ...method, id: 'wechat' }],
+      [{ ...method, enabled: 'true' }],
+      [{ ...method, testMode: undefined }],
+      [{ ...method, credential: 'must-not-pass' }],
+    ])
+      await expect(
+        client(async () => ok({ ...extended, paymentMethods: methods })).getCatalog('guanzhao'),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+    for (const options of [
+      null,
+      [option, option],
+      [{ ...option, enabled: true, amount: undefined }],
+      [{ ...option, priceId: 'unrecognized' }],
+    ])
+      await expect(
+        client(async () =>
+          ok({
+            ...extended,
+            packages: [{ ...extended.packages[0], paymentOptions: options }],
+          }),
+        ).getCatalog('guanzhao'),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it.each([
+    { currency: 'USD', amountMinor: 0 },
+    { currency: 'USD', amountMinor: -1 },
+    { currency: 'USD', amountMinor: 0.5 },
+    { currency: 'USD', amountMinor: Number.NaN },
+    { currency: 'USD', amountMinor: Number.MAX_SAFE_INTEGER + 1 },
+    { currency: 'USD', amountMinor: '50' },
+    { currency: 'JPY', amountMinor: 100 },
+    { currency: 'CNY', amountMinor: 100 },
+    { currency: 'USD', amountMinor: 100, exchangeRate: 7 },
+  ])(
+    'rejects invalid Stripe amounts in quotes and frozen orders: %j',
+    async (paymentAmount) => {
+      await expect(
+        client(async () => ok({ ...stripe, paymentAmount })).getOrder(orderId),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+      await expect(
+        client(async () =>
+          ok({
+            ...extended,
+            packages: [
+              {
+                ...extended.packages[0],
+                paymentOptions: [{ ...option, amount: paymentAmount }],
+              },
+            ],
+          }),
+        ).getCatalog('guanzhao'),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+    },
+  );
+
+  it('rejects foreign QR amounts even when a capability is disabled', async () => {
+    await expect(
+      client(async () => ok({ ...order, paymentAmount: amount })).getOrder(orderId),
+    ).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(
+      client(async () =>
+        ok({
+          ...extended,
+          packages: [
+            {
+              ...extended.packages[0],
+              paymentOptions: [{ payType: 'wechat', enabled: false, amount }],
+            },
+          ],
+        }),
+      ).getCatalog('guanzhao'),
+    ).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it('preserves historical Stripe summaries and missing quotes without inventing a charge or checkout', async () => {
+    const historical = {
+      ...summary,
+      payType: 'stripe',
+      status: 'completed',
+      paidAt: '2026-09-15T02:00:00Z',
+      paymentAmount: amount,
+    };
+    const data = { ...account, orders: [historical] };
+    expect(await client(async () => ok(data)).getAccount('guanzhao')).toEqual(data);
+    const unpriced = { ...order, payType: 'stripe', status: 'pending' };
+    expect(await client(async () => ok(unpriced)).getOrder(orderId)).toEqual(unpriced);
+    await expect(
+      client(async () => ok({ ...unpriced, checkoutUrl: stripe.checkoutUrl })).getOrder(
+        orderId,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_response' });
+    for (const extra of [
+      { testMode: true },
+      { qrImage: png },
+      { checkoutUrl: stripe.checkoutUrl },
+    ]) {
+      await expect(
+        client(async () => ok({ ...data, orders: [{ ...historical, ...extra }] })).getAccount(
+          'guanzhao',
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+    }
+  });
+
+  it.each([
+    'http://checkout.stripe.com/c/pay/id',
+    'https://checkout.stripe.com.evil.test/c/pay/id',
+    'https://user:password@checkout.stripe.com/c/pay/id',
+    'https://checkout.stripe.com:444/c/pay/id',
+    'https://pay.custom.test/c/pay/id',
+    '//checkout.stripe.com/c/pay/id',
+    'javascript:alert(1)',
+    'https://checkout.stripe.com/c/pay/id\n',
+    'https://checkout.stripe.com/c/pay/%xx',
+  ])('rejects unsafe Stripe checkout URL %s', async (checkoutUrl) => {
+    await expect(
+      client(async () => ok({ ...stripe, checkoutUrl })).getOrder(orderId),
+    ).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it('preserves trusted historical checkout URLs without treating them as actionable', async () => {
+    for (const status of [
+      'waiting',
+      'submitting',
+      'pending',
+      'unknown',
+      'failed',
+      'closed',
+      'completed',
+    ]) {
+      const data = {
+        ...stripe,
+        status,
+        paidAt: status === 'completed' ? '2026-09-15T02:00:00Z' : null,
+      };
+      expect(await client(async () => ok(data)).getOrder(orderId)).toEqual(data);
+    }
+  });
+
+  it('rejects checkout on wrong methods and keeps Stripe redirect separate from QR fields', async () => {
+    for (const data of [
+      {
+        ...stripe,
+        payType: 'wechat',
+        paymentAmount: { currency: 'CNY', amountMinor: 100 },
+      },
+      { ...stripe, qrImage: png },
+      { ...stripe, paymentUrl: 'https://provider.test/pay' },
+    ])
+      await expect(client(async () => ok(data)).getOrder(orderId)).rejects.toMatchObject({
+        code: 'invalid_response',
+      });
+  });
+
+  it('sends an explicitly selected Stripe purchase once and preserves method binding', async () => {
+    const fetcher = vi.fn<NonNullable<CommerceClientOptions['fetch']>>(async () => ok(stripe));
+    const purchase = { ...input, payType: 'stripe' as const };
+    expect(await client(fetcher).createOrder(purchase)).toEqual(stripe);
+    expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string)).toEqual(purchase);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await expect(client(async () => ok(order)).createOrder(purchase)).rejects.toMatchObject({
+      code: 'result_unknown',
+      requestKey,
+    });
+    await expect(
+      client(async () => ok({ ...stripe, checkoutUrl: 'https://evil.test' })).createOrder(
+        purchase,
+      ),
+    ).rejects.toMatchObject({ code: 'result_unknown', requestKey });
+  });
+
+  it('keeps a 409 method rejection distinct from uncertain POST results and typed lookup 404', async () => {
+    const fetcher = vi
+      .fn<NonNullable<CommerceClientOptions['fetch']>>()
+      .mockResolvedValueOnce(fail(409, 'payment_method_unavailable'))
+      .mockResolvedValueOnce(fail(404, 'not_found'));
+    const c = client(fetcher);
+    await expect(c.createOrder({ ...input, payType: 'stripe' })).rejects.toMatchObject({
+      code: 'payment_method_unavailable',
+      status: 409,
+      traceId: 'req-9vh',
+    });
+    await expect(c.findOrder(requestKey)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(['POST', 'GET']);
+    await expect(
+      client(async () => fail(503, 'payment_method_unavailable')).createOrder(input),
+    ).rejects.toMatchObject({ code: 'result_unknown', requestKey });
+    await expect(
+      client(async () => fail(400, 'payment_method_unavailable')).getOrder(orderId),
+    ).rejects.toMatchObject({ code: 'invalid_response' });
+  });
 });
 
 describe('public service-commerce client', () => {
