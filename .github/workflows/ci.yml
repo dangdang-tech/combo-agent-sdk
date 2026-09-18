@@ -96,6 +96,9 @@ jobs:
             'AGENT.md',
             'PAYMENT_SDK_INTEGRATION.md',
             'PAYMENT_RECOVERY.md',
+            'COMMERCE_INTEGRATION.md',
+            'dist/commerce.js',
+            'dist/commerce.d.ts',
             'dist/recoverable-payments.js',
             'dist/recoverable-payments.d.ts',
             'templates/nextjs-agent/lib/recoverable-host-payment.ts',
@@ -135,7 +138,7 @@ jobs:
             (/(^|\/)\.env(?:$|\.)/.test(path) && !path.endsWith('/.env.example')),
           );
           const tooLarge = {
-            fileCount: files.size > 80 ? files.size : null,
+            fileCount: files.size > 84 ? files.size : null,
             packedBytes: report[0]?.size > 200_000 ? report[0].size : null,
             unpackedBytes: report[0]?.unpackedSize > 500_000 ? report[0].unpackedSize : null,
           };

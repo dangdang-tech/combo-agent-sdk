@@ -1,4 +1,5 @@
 import { createLlmClient, LlmGatewayError } from './llm.js';
+import { createCommerceClient, CommerceApiError } from './commerce.js';
 import {
   createRecoverablePaymentClient,
   PaymentRecoveryResultUnknownError,
@@ -238,6 +239,51 @@ export async function runPaymentClientConformance(): Promise<ConformanceReport> 
   assert(recoveryWrites === 1, 'recovery GET automatically submitted another write');
   checks.push('v2_explicit_recovery_retains_key');
   checks.push('v2_recovery_read_never_writes');
+  const purchaseKey = '33333333-3333-4333-8333-333333333333';
+  let commerceWrites = 0;
+  const commerce = createCommerceClient({
+    baseUrl: 'https://unused.invalid',
+    fetch: async (url, init) => {
+      assert(init?.credentials === 'include', 'commerce browser session missing');
+      assert(url.includes('/v1/commerce/'), 'commerce used a wallet endpoint');
+      if (init?.method === 'POST') {
+        commerceWrites++;
+        const body = JSON.parse(String(init.body));
+        assert(
+          body.requestKey === purchaseKey && !('paymentToken' in body),
+          'commerce input changed',
+        );
+        throw new Error('controlled commerce response loss');
+      }
+      return Response.json(
+        { error: { code: 'not_found' }, meta: { traceId: 'commerce-fixture' } },
+        { status: 404 },
+      );
+    },
+  });
+  const purchaseError = await commerce
+    .createOrder({
+      agentId: 'fixture-agent',
+      packageId: 'fixture-package',
+      catalogVersion: 'a'.repeat(64),
+      requestKey: purchaseKey,
+      payType: 'wechat',
+    })
+    .catch((error: unknown) => error);
+  assert(
+    purchaseError instanceof CommerceApiError &&
+      purchaseError.code === 'result_unknown' &&
+      purchaseError.requestKey === purchaseKey,
+    'commerce lost its purchase identity',
+  );
+  const lookupError = await commerce.findOrder(purchaseKey).catch((error: unknown) => error);
+  assert(
+    lookupError instanceof CommerceApiError && lookupError.code === 'not_found',
+    'commerce lookup must keep typed 404',
+  );
+  assert(commerceWrites === 1, 'commerce automatically placed a replacement order');
+  checks.push('commerce_uncertain_purchase_keeps_original_key');
+  checks.push('commerce_lookup_never_creates_order');
   return {
     result: 'PASS',
     scope: 'offline_client_contract_only',

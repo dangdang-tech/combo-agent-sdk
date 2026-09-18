@@ -2,7 +2,7 @@
 
 先阅读 [README 能力入口](README.md)与[支付使用手册](PAYMENT_SDK_INTEGRATION.md)，再按本指南实现消费方代码。
 
-当前 SDK 为 `0.2.0`，锁定实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`；状态仍为 `UNRELEASED / PARTIAL`。下文既有 V1 支付 API 保持兼容；付款码缺失或过期后的 V2 恢复接入见 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md#开始接入)。版本与验证记录见 [README](README.md#当前版本与完成情况)，不把模块测试当成完整环境验收。
+当前 SDK 为 `0.4.0`，状态仍为 `UNRELEASED / PARTIAL`；独立 [Commerce 客户端](COMMERCE_INTEGRATION.md)增加可选渠道、币种金额与 Stripe 跳转兼容。既有钱包支付实现基线为 `7186c65809475782f274ee7beeeeef337c1b22cd`。下文既有 V1 支付 API 保持兼容；付款码缺失或过期后的 V2 恢复接入见 [PAYMENT_RECOVERY.md](PAYMENT_RECOVERY.md#开始接入)。版本与验证记录见 [README](README.md#当前版本与完成情况)，不把模块测试当成完整环境验收。
 
 ## 输入
 
@@ -42,7 +42,7 @@ SDK 与 OpenAPI 不一致时先修复协议，不得放宽解析器。`operation
 - 不把模板内存存储当作生产存储；
 - 不在模型调用结果不确定时自动重试；先保留 running/outcome_unknown 状态并由业务找回结果；
 - 只有 `LlmGatewayError.canRetrySameCall === true` 时，才可将原业务请求恢复为 ready 并复用原编号；不能仅凭 HTTP 502 或零费用猜测失败。
-- 不声称退款、订阅、分账、多币种或真实 Sandbox 已实现；doctor 与离线 conformance 不等于真实支付验收。
+- 不声称退款、订阅、分账或真实 Sandbox 已实现；可选币种类型不代表环境已开通外币或 Stripe。doctor 与离线 conformance 不等于真实支付验收。
 
 ## 接入顺序
 
@@ -84,3 +84,9 @@ pnpm --filter combo-reference-agent build
 恢复由 Host 当前会话授权，只有用户明确点击恢复才调用 recover。POST 前持久化 recoveryKey 和 expectedAttemptId，结果未知时只查询原支付并保留原 key；不要换新 key、callId、operationId 或自行决定渠道关单。以服务端 canRecover 决定按钮，以逻辑 completed 决定业务续接，不能把 checkout.closed 当作整个支付结束。
 
 模板 `createRecoverableHostPaymentFlow()` 定义 start/check/recover/open/resume 独立动作和耐久存储接口。业务继续使用原有 OperationStore 与 resume 接口，当前用户变化时停止操作。
+
+## 套餐与服务点数（0.4.0 私有预发布）
+
+使用 [COMMERCE_INTEGRATION.md](COMMERCE_INTEGRATION.md) 中独立 `createCommerceClient()`。该客户端只封装现有 `/v1/commerce` 浏览器会话接口，不接收 wallet paymentToken、不替业务预留或消费点数。Host 下单前保存原 requestKey；未知结果和 findOrder 404 都保留编号，只查询，不自动新建订单。浏览器 baseUrl 必须同源，禁传 Authorization 或自报用户。`closed` 仅为本地到期，不代表渠道关单。接口来源是已核实服务器发布快照；Wallet Payment OpenAPI 锁不覆盖 Commerce，不能混用协议或声称套餐接口已经完成正式协议发布。
+
+可选 `paymentMethods`、`paymentOptions`、`paymentAmount` 和 Stripe `checkoutUrl` 兼容观照应用候选合同，不代表现网渠道已核验。所有方式都由目录与套餐共同启用；不剥除部分元数据后回退旧扫码。冻结金额不从人民币参考价换算，可信历史 checkoutUrl 不代表可付款，Host 仍须检查 pending 和当前到期时间。保留业务既有 operator/多轮模型收费守卫，SDK 升级不会建立服务端点数结算闭环。
